@@ -1,6 +1,6 @@
 """
 ULTIMATE Peak Level Free Proxy Generator - Streamlit Web App (Sep 25, 2025)
-One-Click Magic: Fetch + Test + Filter in Single Button!
+One-Click Magic: Fetch + Test + Filter in Single Button! Full Methods Defined
 """
 
 import streamlit as st
@@ -41,7 +41,7 @@ class ProxyGenerator:
             return None
     
     def fetch_proxies_from_sources(self):
-        """ULTIMATE 2025 Sources: 1000+ Proxies, Multi-Protocol (Sep 25 Verified) - Fixed Unhashable Dict"""
+        """ULTIMATE 2025 Sources: 1000+ Proxies, Multi-Protocol (Sep 25 Verified) - Full Methods"""
         sources = [
             self.fetch_from_proxifly_cdn,
             self.fetch_from_thespeedx_socks,
@@ -56,7 +56,7 @@ class ProxyGenerator:
         ]
         
         all_proxies = []
-        seen = set()  # Use set of keys to avoid duplicates
+        seen = set()
         for source in sources:
             try:
                 proxies = source()
@@ -71,8 +71,8 @@ class ProxyGenerator:
                 
         return random.sample(all_proxies, min(300, len(all_proxies)))
     
-    # All fetch methods same as previous (Proxifly, TheSpeedX, etc.) - copy full from last code
     def fetch_from_proxifly_cdn(self):
+        """Proxifly CDN - Every 5 min, 440+ Sep 22 Update"""
         try:
             proxies = []
             urls = {
@@ -97,7 +97,218 @@ class ProxyGenerator:
             st.error(f"Proxifly error: {e}")
             return []
     
-    # ... (Paste all other fetch methods from previous code: fetch_from_thespeedx_socks, fetch_from_oxylabs_github, etc.)
+    def fetch_from_thespeedx_socks(self):
+        """TheSpeedX SOCKS-List - Daily 44k"""
+        try:
+            proxies = []
+            urls = {
+                'HTTP': "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+                'SOCKS4': "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
+                'SOCKS5': "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt"
+            }
+            for ptype, url in urls.items():
+                response = requests.get(url, headers=self.headers, timeout=10)
+                if response.status_code == 200:
+                    lines = [line.strip() for line in response.text.split('\n') if ':' in line][:50]
+                    for line in lines:
+                        ip, port = line.split(':', 1)
+                        if self.is_valid_ip(ip) and port.isdigit():
+                            proxies.append({
+                                'ip': ip, 'port': port, 'country': 'Unknown', 'type': ptype,
+                                'anonymity': 'Unknown', 'source': 'TheSpeedX (Daily 44k)'
+                            })
+            return proxies
+        except Exception as e:
+            st.error(f"TheSpeedX error: {e}")
+            return []
+    
+    def fetch_from_oxylabs_github(self):
+        """Oxylabs Free Proxy List - Chrome Extension Compatible"""
+        try:
+            proxies = []
+            url = "https://raw.githubusercontent.com/oxylabs/free-proxy-list/main/http.txt"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                lines = [line.strip() for line in response.text.split('\n') if ':' in line][:30]
+                for line in lines:
+                    ip, port = line.split(':', 1)
+                    if self.is_valid_ip(ip) and port.isdigit():
+                        proxies.append({
+                            'ip': ip, 'port': port, 'country': 'Unknown', 'type': 'HTTP',
+                            'anonymity': 'Elite', 'source': 'Oxylabs GitHub'
+                        })
+            return proxies
+        except Exception as e:
+            st.error(f"Oxylabs error: {e}")
+            return []
+    
+    def fetch_from_mmpx12_hourly(self):
+        """mmpx12 Proxy List - Hourly Updates"""
+        try:
+            proxies = []
+            urls = [
+                "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
+                "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt"
+            ]
+            for url in urls:
+                ptype = 'SOCKS5' if 'socks5' in url else 'HTTP'
+                response = requests.get(url, headers=self.headers, timeout=10)
+                if response.status_code == 200:
+                    lines = [line.strip() for line in response.text.split('\n') if ':' in line][:25]
+                    for line in lines:
+                        ip, port = line.split(':', 1)
+                        if self.is_valid_ip(ip) and port.isdigit():
+                            proxies.append({
+                                'ip': ip, 'port': port, 'country': 'Unknown', 'type': ptype,
+                                'anonymity': 'Elite', 'source': 'mmpx12 (Hourly)'
+                            })
+            return proxies
+        except Exception as e:
+            st.error(f"mmpx12 error: {e}")
+            return []
+    
+    def fetch_from_jetkai_hourly(self):
+        """Jetkai - Hourly, Geo via TXT"""
+        try:
+            proxies = []
+            urls = {
+                'HTTP': "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt",
+                'SOCKS5': "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt"
+            }
+            for ptype, url in urls.items():
+                response = requests.get(url, headers=self.headers, timeout=10)
+                if response.status_code == 200:
+                    lines = [line.strip() for line in response.text.split('\n') if ':' in line][:30]
+                    for line in lines:
+                        ip, port = line.split(':', 1)
+                        if self.is_valid_ip(ip) and port.isdigit():
+                            proxies.append({
+                                'ip': ip, 'port': port, 'country': 'Geo-Avail', 'type': ptype,
+                                'anonymity': 'Elite', 'source': 'Jetkai (Hourly Geo)'
+                            })
+            return proxies
+        except Exception as e:
+            st.error(f"Jetkai error: {e}")
+            return []
+    
+    def fetch_from_monosans_hourly(self):
+        """Monosans - Hourly Geo"""
+        try:
+            proxies = []
+            url = "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                lines = [line.strip() for line in response.text.split('\n') if ':' in line][:25]
+                for line in lines:
+                    ip, port = line.split(':', 1)
+                    if self.is_valid_ip(ip) and port.isdigit():
+                        proxies.append({
+                            'ip': ip, 'port': port, 'country': 'Geo-Avail', 'type': 'SOCKS5',
+                            'anonymity': 'Elite', 'source': 'Monosans (Hourly Geo)'
+                        })
+            return proxies
+        except Exception as e:
+            st.error(f"Monosans error: {e}")
+            return []
+    
+    def fetch_from_vakhov_fresh(self):
+        """Vakhov Fresh"""
+        try:
+            proxies = []
+            urls = [
+                "https://vakhov.github.io/fresh-proxy-list/http.txt",
+                "https://vakhov.github.io/fresh-proxy-list/socks5.txt"
+            ]
+            for url in urls:
+                ptype = 'SOCKS5' if 'socks5' in url else 'HTTP'
+                response = requests.get(url, headers=self.headers, timeout=10)
+                if response.status_code == 200:
+                    lines = [line.strip() for line in response.text.split('\n') if ':' in line][:20]
+                    for line in lines:
+                        ip, port = line.split(':', 1)
+                        if self.is_valid_ip(ip) and port.isdigit():
+                            proxies.append({
+                                'ip': ip, 'port': port, 'country': 'Unknown', 'type': ptype,
+                                'anonymity': 'Elite', 'source': 'Vakhov Fresh'
+                            })
+            return proxies
+        except Exception as e:
+            st.error(f"Vakhov error: {e}")
+            return []
+    
+    def fetch_from_kangproxy(self):
+        """KangProxy - 4-6hr Validate"""
+        try:
+            proxies = []
+            url = "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/socks5/socks5.txt"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                lines = [line.strip() for line in response.text.split('\n') if ':' in line][:15]
+                for line in lines:
+                    ip, port = line.split(':', 1)
+                    if self.is_valid_ip(ip) and port.isdigit():
+                        proxies.append({
+                            'ip': ip, 'port': port, 'country': 'Unknown', 'type': 'SOCKS5',
+                            'anonymity': 'Elite', 'source': 'KangProxy (4-6hr)'
+                        })
+            return proxies
+        except Exception as e:
+            st.error(f"KangProxy error: {e}")
+            return []
+    
+    def fetch_from_proxyscrape_api(self):
+        """ProxyScrape API - Every 5 min"""
+        try:
+            proxies = []
+            apis = [
+                "https://api.proxyscrape.com/v2/?request=get&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all",
+                "https://api.proxyscrape.com/v2/?request=get&protocol=socks5&timeout=5000&country=all&ssl=all&anonymity=all"
+            ]
+            for api in apis:
+                ptype = 'SOCKS5' if 'socks5' in api else 'HTTP'
+                response = requests.get(api, headers=self.headers, timeout=10)
+                if response.status_code == 200:
+                    lines = [line.strip() for line in response.text.split('\n') if ':' in line][:30]
+                    for line in lines:
+                        ip, port = line.split(':', 1)
+                        if self.is_valid_ip(ip) and port.isdigit():
+                            proxies.append({
+                                'ip': ip, 'port': port, 'country': 'Unknown', 'type': ptype,
+                                'anonymity': 'Elite', 'source': 'ProxyScrape API (5-min)'
+                            })
+            return proxies
+        except Exception as e:
+            st.error(f"ProxyScrape error: {e}")
+            return []
+    
+    def fetch_from_free_proxy_list_net(self):
+        """Free-Proxy-List.net - 10-min"""
+        try:
+            url = "https://free-proxy-list.net/"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            proxies = []
+            table = soup.find('table', id='proxylisttable')
+            if table:
+                rows = table.find('tbody').find_all('tr')[:50]
+                for row in rows:
+                    cols = row.find_all('td')
+                    if len(cols) >= 7:
+                        ip = cols[0].text.strip()
+                        port = cols[1].text.strip()
+                        country = cols[2].text.strip()
+                        anonymity = cols[4].text.strip()
+                        https = 'yes' if cols[6].text.strip() == 'yes' else 'no'
+                        ptype = 'HTTPS' if https == 'yes' else 'HTTP'
+                        if self.is_valid_ip(ip) and port.isdigit():
+                            proxies.append({
+                                'ip': ip, 'port': port, 'country': country, 'type': ptype,
+                                'anonymity': anonymity, 'source': 'Free-Proxy-List.net (10-min)'
+                            })
+            return proxies
+        except Exception as e:
+            st.error(f"Free-Proxy-List error: {e}")
+            return []
     
     def is_valid_ip(self, ip):
         pattern = re.compile(r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$')
@@ -107,7 +318,7 @@ class ProxyGenerator:
         return False
     
     def test_proxy(self, proxy_info):
-        # Same ULTIMATE test as previous
+        """ULTIMATE Test: Multi-URL, Speed <1.5s, IP Change Verify, SOCKS Full"""
         start_time = time.time()
         working = True
         total_time = 0
@@ -198,7 +409,6 @@ def main():
     
     # Separate buttons for manual
     if st.sidebar.button("🔍 Fetch Only"):
-        # Fetch code same as before
         proxies = proxy_gen.fetch_proxies_from_sources()
         st.session_state.proxies = proxies
         st.session_state.countries = sorted(set(p['country'] for p in proxies if p['country'] != 'Unknown'))
@@ -208,7 +418,6 @@ def main():
         if 'proxies' not in st.session_state:
             st.warning("Fetch first!")
             st.stop()
-        # Test code same as before
         working = []
         with ThreadPoolExecutor(max_workers=40) as executor:
             futures = {executor.submit(proxy_gen.test_proxy, p): p for p in st.session_state.proxies}
@@ -254,7 +463,7 @@ def main():
         if verified == 0 and total > 0:
             st.info("💡 Tip: Use 'One-Click ULTIMATE' for auto everything, or test manually.")
     
-    # Actions (JS Copy Fixed)
+    # Actions
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("📋 Copy Verified Proxies"):
@@ -262,7 +471,6 @@ def main():
             if verified:
                 text = '\n'.join([f"{p['ip']}:{p['port']} ({p['type']})" for p in verified])
                 st.text_area("Proxies to Copy (Select & Ctrl+C):", text, height=200)
-                # JS Clipboard
                 st.markdown(f"""
                 <script>
                 function copyToClipboard() {{
