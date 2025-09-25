@@ -1,6 +1,6 @@
 """
 ULTIMATE Peak Level Free Proxy Generator - Streamlit Web App (Sep 25, 2025)
-100% Working High-Speed + Anon Verified Proxies | Fixed bs4 Import
+100% Working High-Speed + Anon Verified Proxies | Fixed Unhashable Dict Error
 Deploy on Streamlit Cloud: GitHub Repo → Connect → Run!
 Latest Sources: Proxifly (Sep 22 Update 440+), TheSpeedX Daily 44k, mmpx12 Hourly, Oxylabs, ProxyScrape 5-min
 """
@@ -43,7 +43,7 @@ class ProxyGenerator:
             return None
     
     def fetch_proxies_from_sources(self):
-        """ULTIMATE 2025 Sources: 1000+ Proxies, Multi-Protocol (Sep 25 Verified)"""
+        """ULTIMATE 2025 Sources: 1000+ Proxies, Multi-Protocol (Sep 25 Verified) - Fixed Unhashable Dict"""
         sources = [
             self.fetch_from_proxifly_cdn,
             self.fetch_from_thespeedx_socks,
@@ -57,17 +57,21 @@ class ProxyGenerator:
             self.fetch_from_free_proxy_list_net
         ]
         
-        all_proxies = set()
+        all_proxies = []
+        seen = set()  # Use set of keys to avoid duplicates
         for source in sources:
             try:
                 proxies = source()
-                all_proxies.update(proxies)
+                for p in proxies:
+                    key = f"{p['ip']}:{p['port']}:{p['type']}"
+                    if key not in seen:
+                        seen.add(key)
+                        all_proxies.append(p)
                 time.sleep(0.5)
             except Exception as e:
                 st.error(f"Source error: {e}")
                 
-        unique_proxies = list({f"{p['ip']}:{p['port']}:{p['type']}": p for p in all_proxies}.values())
-        return random.sample(unique_proxies, min(300, len(unique_proxies)))
+        return random.sample(all_proxies, min(300, len(all_proxies)))
     
     def fetch_from_proxifly_cdn(self):
         """Proxifly CDN - Every 5 min, 440+ Sep 22 Update"""
