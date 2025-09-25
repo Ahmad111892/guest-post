@@ -1,15 +1,15 @@
-streamlit==1.38.0
-requests==2.32.3
-beautifulsoup4==4.12.3  # This fixes bs4!
-pandas==2.2.2
-plotly==5.22.0
-lxml==5.2.1
-nltk==3.8.1
-textstat==0.7.3
-python-whois==0.9.14  # whois (2025 active)
-fake-useragent==1.5.1
-aiohttp==3.10.5
-nest-asyncio==1.6.0
-openpyxl==3.1.2  # Excel
-textblob==0.18.0
-wordcloud==1.9.3  # Optional
+streamlit
+requests
+beautifulsoup4
+pandas
+plotly
+lxml
+nltk
+textstat
+python-whois
+fake-useragent
+aiohttp
+nest-asyncio
+openpyxl
+textblob
+wordcloud
