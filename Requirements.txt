@@ -1,9 +1,9 @@
 streamlit==1.38.0
 requests==2.32.3
-beautifulsoup4==4.12.3  # Yeh bs4 import fix karega – 'bs4' mat likhna!
+beautifulsoup4==4.12.3  # Yeh bs4 import fix karega – exact name!
 pandas==2.2.2
 plotly==5.22.0
-lxml==5.2.1  # bs4 ke liye zaroori parser
+lxml==5.2.1  # bs4 parser ke liye zaroori
 nltk==3.8.1
 textstat==0.7.3
 python-whois==0.9.14
