@@ -11,3 +11,4 @@ fake-useragent
 aiohttp
 nest-asyncio
 openpyxl
+bs4
