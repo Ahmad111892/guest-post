@@ -1,4 +1,5 @@
-requests 
-beautifulsoup4 
-pyperclip 
+streamlit
+requests
+beautifulsoup4
 pysocks
+pandas
