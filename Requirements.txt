@@ -1,0 +1,13 @@
+streamlit
+requests
+beautifulsoup4
+pandas
+plotly
+lxml
+nltk
+textstat
+whois
+fake-useragent
+aiohttp
+nest-asyncio
+openpyxl
