@@ -5,4 +5,3 @@ beautifulsoup4
 plotly 
 textstat 
 python-whois
-openpyxl
