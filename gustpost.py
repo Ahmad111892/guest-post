@@ -81,7 +81,6 @@ class UltimateGuestPostingFinder:
         return list(all_queries)
 
     def search_ddg_api(self, query):
-        """PRIMARY SEARCH METHOD: Uses the reliable DuckDuckGo JSON API."""
         headers = self.get_random_headers()
         params = {'q': query, 'format': 'json', 'no_html': '1', 'skip_disambig': '1'}
         try:
@@ -95,7 +94,6 @@ class UltimateGuestPostingFinder:
             return []
 
     def search_startpage(self, query):
-        """SECONDARY SEARCH METHOD: Scrapes Startpage for Google-quality results."""
         headers = self.get_random_headers()
         url = f"https://www.startpage.com/sp/search?q={quote_plus(query)}"
         try:
@@ -180,7 +178,6 @@ class UltimateGuestPostingFinder:
         all_urls = set()
         
         with ThreadPoolExecutor(max_workers=15) as executor:
-            # Use the two reliable search methods
             futures = {executor.submit(self.search_ddg_api, query) for query in all_queries}
             futures.update({executor.submit(self.search_startpage, query) for query in all_queries})
             
@@ -193,7 +190,7 @@ class UltimateGuestPostingFinder:
         unique_urls = list(all_urls)[:max_sites * 3]
         
         if not unique_urls:
-            status_text.error("Search phase completed but found 0 URLs. The search engines may be down or your niche is very specific.")
+            status_text.error("Search phase completed but found 0 URLs.")
             return []
 
         status_text.text(f"🔬 Found {len(unique_urls)} unique URLs. Starting deep analysis...")
@@ -207,7 +204,6 @@ class UltimateGuestPostingFinder:
                 status_text.text(f"🔬 Analyzing... {i+1}/{len(analysis_futures)} sites processed. Found {len(results)} opportunities.")
         
         st.session_state.search_stats['sites_analyzed'] = len(results)
-        # Filter and sort only after all analysis is complete
         filtered_results = [r for r in results if r.get('confidence_score', 0) > 0]
         filtered_results.sort(key=lambda x: (x.get('confidence_score', 0) * 0.6 + x.get('domain_authority', 0) * 0.4), reverse=True)
         
@@ -304,8 +300,26 @@ def main():
             with tab3:
                 create_export_options(results)
         else:
+            # CORRECTED f-string for displaying stats
             stats = st.session_state.search_stats
-            st.markdown('<div class="warning-card"><h3>🔍 No Results Found</h3><p>Your search returned no opportunities. Here is a summary of the search:</p><ul><li>Potential URLs found: <strong>{stats["urls_found"]}</strong></li><li>Sites that passed analysis: <strong>{stats["sites_analyzed"]}</strong></li></ul><p><strong>Suggestions:</strong></p><ul><li>Use a broader niche (e.g., "health" instead of "Ayurvedic wellness for seniors").</li><li>Remove competitor or location filters.</li><li>If URLs Found is 0, the search engines may be temporarily unavailable. Please try again in a few minutes.</li></ul></div>'.format(stats=stats), unsafe_allow_html=True)
+            urls_found = stats.get("urls_found", 0)
+            sites_analyzed = stats.get("sites_analyzed", 0)
+            st.markdown(f'''
+            <div class="warning-card">
+                <h3>🔍 No Results Found</h3>
+                <p>Your search returned no opportunities. Here is a summary:</p>
+                <ul>
+                    <li>Potential URLs found: <strong>{urls_found}</strong></li>
+                    <li>Sites that passed analysis: <strong>{sites_analyzed}</strong></li>
+                </ul>
+                <p><strong>Suggestions:</strong></p>
+                <ul>
+                    <li>Use a broader niche (e.g., "health" instead of "Ayurvedic wellness for seniors").</li>
+                    <li>Remove competitor or location filters.</li>
+                    <li>If "Potential URLs found" is 0, the search engines may be temporarily unavailable. Please try again in a few minutes.</li>
+                </ul>
+            </div>
+            ''', unsafe_allow_html=True)
     else:
         st.info("💡 Enter your niche in the sidebar and click 'START' to discover opportunities.")
 
