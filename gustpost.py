@@ -28,7 +28,7 @@ try:
     from textblob import TextBlob
     from textstat import flesch_reading_ease
 except ImportError:
-    # Handle cases where NLTK dependencies might not be available
+    # Handle cases where NLTK dependencies might be available
     pass
 
 # Page config
@@ -88,14 +88,44 @@ class UltraUltimateConfig:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0'
     ]
     
+    # EXPANDED SEARCH PATTERNS: Now covering Very Low to Hidden levels (~52 unique patterns)
     ULTRA_ULTIMATE_SEARCH_PATTERNS = [
+        # Very Low Level (Basic & Common Phrases)
         '"{}" "write for us"', '"{}" "guest post"', '"{}" "contribute"', '"{}" "submit article"',
-        '"{}" "guest author"', '"{}" "become a contributor"', 'intitle:"{}" "write for us"',
-        '"{}" inurl:write-for-us', '"{}" inurl:guest-post', '"{}" "accepting guest posts"',
-        '"{}" "guest blogger"', '"{}" "freelance writer"', '"{}" "submit content"',
-        '"{}" filetype:pdf "submission guidelines"', '"{}" site:medium.com "write"',
-        '"{}" ("write for us" OR "guest post")', '"{}" -"no guest posts"',
-    ] * 15  # Expanded to simulate 255+ patterns
+        '"{}" "guest author"', '"{}" "become a contributor"', '"{}" "submit guest post"',
+        '"{}" "guest post guidelines"', '"{}" "contributing writer"', 'inurl:"{}" "contributor"',
+        
+        # Low Level (Synonyms & Basic Exclusion)
+        '"{}" "accepting submissions"', '"{}" "send us a pitch"', '"{}" "want to write"', 
+        '"{}" "looking for authors"', '"{}" "guest blogging opportunity"', '"{}" "guest blogger"',
+        '"{}" ("write for us" OR "guest post")', '"{}" -"no guest posts"', '"{}" "contributor guidelines"',
+        'intitle:"{}" "submit article"', '"{}" "submit a guest post"',
+        
+        # Mid Level (Advanced Operators & Content Focus)
+        'intitle:"{}" "write for us"', 'inurl:"{}" "guest-post"', '"{}" "guest writer profile"',
+        '"{}" site:.com "write for us"', '"{}" site:.org "guest post"', '"{}" "editorial guidelines"',
+        '"{}" "resource page" "suggest"', '"{}" "partner with us"', '"{}" "submit content"',
+        '"{}" filetype:pdf "submission guidelines"', '"{}" "guest post" "community"',
+        
+        # High Level (Payment/Sponsored/Niche Platforms)
+        '"{}" "sponsored post" "pricing"', '"{}" "advertise with us" "content"', 
+        '"{}" "write for us" "paid"', '"{}" "contributor network"', 
+        '"{}" site:medium.com "write"', '"{}" site:linkedin.com/posts "contribute"',
+        '"{}" "in the media"', '"{}" "featured on"', '"{}" "write for us" "cost"',
+        '"{}" "guest post" "review"',
+        
+        # Peak Level (Contact/Email Discovery)
+        '"{}" "email us at"', '"{}" "contact us for guest post"', '"{}" "editor@"',
+        '"{}" "advertising@"', '"{}" "marketing contact"', '"{}" inurl:contact "pitch"',
+        '"{}" "guest post" intext:contact',
+        
+        # Secrets and Hidden (Obscure phrases & Filetypes)
+        '"{}" "powered by wordpress" "submit"', 
+        '"{}" "add your link"', '"{}" filetype:doc "guest post"', 
+        '"{}" "in partnership with"', '"{}" "want to collaborate"',
+        '"{}" "guest post" 2024',
+        '"{}" "post collaboration"', '"{}" "syndication request"',
+    ]
 
 class UltraUltimateGuestPostingFinder:
     def __init__(self):
@@ -329,7 +359,7 @@ class UltraUltimateGuestPostingFinder:
             niche = st.text_input("Niche", "technology")
             max_sites = st.slider("Max Sites", 10, 100, 50)
             # NEW: Slider for controlling search depth
-            max_queries = st.slider("Search Query Depth", 1, 20, 10, help="Number of unique search patterns to execute (Max 20 for demo to prevent excessive querying)") 
+            max_queries = st.slider("Search Query Depth", 1, 52, 10, help="Number of unique search patterns to execute (Max 52 for the full ULTIMATE list)") 
             min_da = st.slider("Min DA", 0, 100, 30)
             
             if st.button("🚀 Launch Search", type="primary"):
