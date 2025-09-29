@@ -106,7 +106,12 @@ class GuestPostingFinder:
             '"{}" "submission guidelines"',
             '"{}" "become a contributor"',
             '"{}" "freelance writers wanted"',
-            '"{}" "guest posting opportunities"'
+            '"{}" "guest posting opportunities"',
+            '"{}" "submit guest post"',
+            '"{}" "contributor guidelines"',
+            '"{}" inurl:contribute',
+            '"{}" "write for our blog"',
+            '"{}" intitle:"guest post"'
         ]
         
         self.confidence_indicators = {
@@ -129,56 +134,105 @@ class GuestPostingFinder:
         }
     
     def search_google(self, query, num_results=10):
-        """Search Google for results"""
+        """Search Google for results with multiple selectors"""
         results = []
         try:
             encoded_query = quote_plus(query)
-            url = f"https://www.google.com/search?q={encoded_query}&num={num_results}"
+            url = f"https://www.google.com/search?q={encoded_query}&num={num_results * 2}"
             
             response = requests.get(url, headers=self.get_headers(), timeout=10)
             
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                for result in soup.select('div.yuRUbf, div.g'):
-                    link = result.select_one('a')
-                    if link and link.get('href'):
-                        url = link.get('href')
-                        if url.startswith('http') and self.is_valid_url(url):
-                            results.append(url)
+                # Try multiple selectors
+                selectors = ['div.yuRUbf a', 'div.g a', 'div.tF2Cxc a', 'h3 a', 'a[href^="http"]']
+                
+                for selector in selectors:
+                    for link in soup.select(selector):
+                        href = link.get('href')
+                        if href and href.startswith('http') and self.is_valid_url(href):
+                            # Clean Google redirect URLs
+                            if '/url?q=' in href:
+                                href = href.split('/url?q=')[1].split('&')[0]
+                            results.append(href)
+                            if len(results) >= num_results:
+                                break
+                    if len(results) >= num_results:
+                        break
                 
                 time.sleep(random.uniform(2, 4))
         except Exception as e:
-            st.warning(f"Search error: {str(e)}")
+            pass
         
-        return results[:num_results]
+        return list(set(results))[:num_results]
     
     def search_bing(self, query, num_results=10):
-        """Search Bing for results"""
+        """Search Bing for results with better parsing"""
         results = []
         try:
             encoded_query = quote_plus(query)
-            url = f"https://www.bing.com/search?q={encoded_query}&count={num_results}"
+            url = f"https://www.bing.com/search?q={encoded_query}&count={num_results * 2}"
             
             response = requests.get(url, headers=self.get_headers(), timeout=10)
             
             if response.status_code == 200:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                for result in soup.select('li.b_algo'):
-                    link = result.select_one('h2 a')
+                # Multiple selectors for Bing
+                for result in soup.select('li.b_algo, .b_algo, .b_result'):
+                    link = result.select_one('h2 a, a[href^="http"]')
                     if link and link.get('href'):
                         url = link.get('href')
                         if self.is_valid_url(url):
                             results.append(url)
                 
+                # Also check direct links
+                for link in soup.select('a[href^="http"]'):
+                    href = link.get('href')
+                    if self.is_valid_url(href):
+                        results.append(href)
+                
                 time.sleep(random.uniform(1, 2))
         except Exception:
             pass
         
-        return results[:num_results]
+        return list(set(results))[:num_results]
     
-    def is_valid_url(self, url):
+    def search_duckduckgo(self, query, num_results=10):
+        """Search DuckDuckGo - more reliable and no rate limits"""
+        results = []
+        try:
+            encoded_query = quote_plus(query)
+            url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
+            
+            response = requests.post(url, headers=self.get_headers(), timeout=10)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # DuckDuckGo result selectors
+                for result in soup.select('.result, .web-result, .results_links'):
+                    link = result.select_one('a.result__a, a[href^="http"]')
+                    if link:
+                        href = link.get('href')
+                        # Clean DuckDuckGo redirect
+                        if href and '//duckduckgo.com/l/?' in href:
+                            try:
+                                href = href.split('uddg=')[1].split('&')[0]
+                                from urllib.parse import unquote
+                                href = unquote(href)
+                            except:
+                                continue
+                        
+                        if href and self.is_valid_url(href):
+                            results.append(href)
+                
+                time.sleep(1)
+        except Exception:
+            pass
+        
+        return list(set(results))[:num_results]
         """Validate URL"""
         if not url or len(url) < 10:
             return False
@@ -339,48 +393,85 @@ class GuestPostingFinder:
         return 50.0
     
     def mega_search(self, niche, max_sites=50):
-        """Execute comprehensive search"""
+        """Execute comprehensive search with multiple engines"""
         all_urls = []
         
-        # Generate queries
-        queries = [pattern.format(niche) for pattern in self.search_patterns[:8]]
+        # Generate more queries
+        queries = [pattern.format(niche) for pattern in self.search_patterns[:10]]
         
         progress_bar = st.progress(0)
         status = st.empty()
         
-        # Search multiple engines
+        total_steps = len(queries) * 3  # 3 search engines per query
+        current_step = 0
+        
+        # Search each query on multiple engines
         for i, query in enumerate(queries):
-            status.text(f"🔍 Searching query {i+1}/{len(queries)}: {query[:50]}...")
+            status.text(f"🔍 Query {i+1}/{len(queries)}: {query[:50]}...")
             
             # Google search
-            google_results = self.search_google(query, 5)
-            all_urls.extend(google_results)
+            try:
+                google_results = self.search_google(query, 10)
+                all_urls.extend(google_results)
+                status.text(f"✅ Google: {len(google_results)} results from query {i+1}")
+            except:
+                pass
+            current_step += 1
+            progress_bar.progress(current_step / total_steps * 0.5)
             
             # Bing search
-            bing_results = self.search_bing(query, 5)
-            all_urls.extend(bing_results)
+            try:
+                bing_results = self.search_bing(query, 10)
+                all_urls.extend(bing_results)
+                status.text(f"✅ Bing: {len(bing_results)} results from query {i+1}")
+            except:
+                pass
+            current_step += 1
+            progress_bar.progress(current_step / total_steps * 0.5)
             
-            progress_bar.progress((i + 1) / (len(queries) * 2))
-            time.sleep(1)
+            # DuckDuckGo search
+            try:
+                ddg_results = self.search_duckduckgo(query, 10)
+                all_urls.extend(ddg_results)
+                status.text(f"✅ DuckDuckGo: {len(ddg_results)} results from query {i+1}")
+            except:
+                pass
+            current_step += 1
+            progress_bar.progress(current_step / total_steps * 0.5)
+            
+            time.sleep(0.5)
         
         # Deduplicate
-        unique_urls = list(set(all_urls))[:max_sites]
-        status.text(f"📊 Found {len(unique_urls)} unique URLs. Analyzing...")
+        unique_urls = list(set(all_urls))
+        status.text(f"📊 Found {len(unique_urls)} unique URLs from {len(all_urls)} total results")
         
-        # Analyze sites
+        # Limit to max_sites
+        unique_urls = unique_urls[:max_sites]
+        
+        status.text(f"🔬 Analyzing {len(unique_urls)} sites...")
+        
+        # Analyze sites with parallel processing
         analyzed_sites = []
-        for i, url in enumerate(unique_urls):
-            site = self.analyze_site(url)
-            if site and site.confidence_score > 0:
-                analyzed_sites.append(site)
+        
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_url = {executor.submit(self.analyze_site, url): url for url in unique_urls}
             
-            progress_bar.progress(0.5 + (i + 1) / len(unique_urls) * 0.5)
+            for i, future in enumerate(as_completed(future_to_url)):
+                try:
+                    site = future.result()
+                    if site and site.confidence_score > 0:
+                        analyzed_sites.append(site)
+                        status.text(f"✅ Analyzed {i+1}/{len(unique_urls)}: {site.domain}")
+                except Exception as e:
+                    pass
+                
+                progress_bar.progress(0.5 + (i + 1) / len(unique_urls) * 0.5)
         
         # Sort by score
         analyzed_sites.sort(key=lambda x: x.overall_score, reverse=True)
         
         progress_bar.progress(1.0)
-        status.text(f"✅ Analysis complete! Found {len(analyzed_sites)} opportunities.")
+        status.text(f"✅ Complete! Found {len(analyzed_sites)} quality opportunities.")
         
         self.results = analyzed_sites
         return analyzed_sites
