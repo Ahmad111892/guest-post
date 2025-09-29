@@ -1,329 +1,558 @@
+# app.py
+
 import streamlit as st
 import requests
-from bs4 import BeautifulSoup
 import time
-import random
-import re
-import json
 import pandas as pd
-import sqlite3
-from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
+import re
 from datetime import datetime
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Optional
+import json
+from urllib.parse import urlparse, quote_plus, unquote
 import plotly.express as px
 import plotly.graph_objects as go
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import asyncio
-import aiohttp
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from collections import Counter, defaultdict
-import warnings
-warnings.filterwarnings('ignore')
+import hashlib
+import random
+import ssl
+import socket
+from collections import Counter
+import nltk
+from textstat import flesch_reading_ease, flesch_kincaid_grade
+import whois
+import dns.resolver
 
-# NLTK setup
+# Download required NLTK data safely
 try:
-    import nltk
-    nltk.download('punkt', quiet=True)
-    nltk.download('stopwords', quiet=True)
-    from textblob import TextBlob
-    from textstat import flesch_reading_ease
-except ImportError:
-    pass
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    try:
+        nltk.download('punkt', quiet=True)
+    except Exception as e:
+        st.warning(f"Could not download NLTK 'punkt' data. Some readability analyses may be affected. Error: {e}")
 
-# Page config
+
+# --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="🚀 ULTRA ULTIMATE Guest Posting Finder",
-    page_icon="🎯",
+    page_title="🚀 ULTIMATE Guest Posting Finder",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# --- CUSTOM CSS FOR UI ENHANCEMENT ---
 st.markdown("""
 <style>
-.main-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; color: white; text-align: center; margin-bottom: 2rem; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
-.metric-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 1.5rem; border-radius: 12px; color: white; text-align: center; margin: 0.5rem 0; box-shadow: 0 5px 15px rgba(0,0,0,0.2); }
-.site-card { background: white; padding: 1.5rem; border-radius: 12px; margin: 1rem 0; box-shadow: 0 5px 20px rgba(0,0,0,0.1); border-left: 5px solid #4CAF50; }
-.platinum-site { border-left-color: #9C27B0 !important; }
-.gold-site { border-left-color: #FF9800 !important; }
-.silver-site { border-left-color: #607D8B !important; }
-.bronze-site { border-left-color: #795548 !important; }
-.low-site { border-left-color: #f44336 !important; }
-.success-badge { background: #4CAF50; color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; margin: 2px; display: inline-block; }
-.action-button { background: linear-gradient(45deg, #667eea, #764ba2); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; margin: 2px; }
+    .main-header {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background: #FFFFFF;
+        padding: 1.5rem;
+        border-radius: 10px;
+        color: #333;
+        text-align: center;
+        border: 1px solid #E0E0E0;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    }
+    .success-card {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        padding: 1.5rem;
+        border-radius: 10px;
+        color: white;
+        margin: 1rem 0;
+    }
+    .warning-card {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        padding: 1.5rem;
+        border-radius: 10px;
+        color: white;
+        margin: 1rem 0;
+    }
+    .stButton>button {
+        width: 100%;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-@dataclass
-class UltimateGuestPostSite:
-    domain: str = ""
-    url: str = ""
-    title: str = ""
-    description: str = ""
-    emails: List[str] = None
-    contact_forms: List[str] = None
-    phone_numbers: List[str] = None
-    social_media: Dict[str, str] = None
-    estimated_da: int = 0
-    estimated_pa: int = 0
-    estimated_traffic: int = 0
-    content_quality_score: int = 0
-    readability_score: float = 0.0
-    confidence_score: int = 0
-    confidence_level: str = "low"
-    overall_score: float = 0.0
-    priority_level: str = "Low"
-    success_probability: float = 0.0
-    do_follow_links: bool = False
-    submission_requirements: List[str] = None
-    preferred_topics: List[str] = None
 
-class UltraUltimateConfig:
-    STEALTH_USER_AGENTS = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0'
-    ]
-    
-    ULTRA_ULTIMATE_SEARCH_PATTERNS = [
-        '"{}" "write for us"', '"{}" "guest post"', '"{}" "contribute"', '"{}" "submit article"',
-        '"{}" "guest author"', '"{}" "become a contributor"', 'intitle:"{}" "write for us"',
-        '"{}" inurl:write-for-us', '"{}" inurl:guest-post', '"{}" "accepting guest posts"',
-        '"{}" "guest blogger"', '"{}" "freelance writer"', '"{}" "submit content"',
-        '"{}" filetype:pdf "submission guidelines"', '"{}" site:medium.com "write"',
-        '"{}" ("write for us" OR "guest post")', '"{}" -"no guest posts"',
-        # Expanded to simulate 200+ patterns (repeat base ones for demo)
-    ] * 10  # In production, expand uniquely to 200+
+# --- CORE APPLICATION CLASS ---
+class UltimateGuestPostingFinder:
+    """
+    A comprehensive tool to find, analyze, and score guest posting opportunities.
+    This class encapsulates all functionality from web scraping to data analysis and presentation.
+    """
 
-class UltraUltimateGuestPostingFinder:
     def __init__(self):
-        self.config = UltraUltimateConfig()
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': random.choice(self.config.STEALTH_USER_AGENTS),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-        })
-        self.conn = sqlite3.connect(':memory:')
-        self.cursor = self.conn.cursor()
-        self.cursor.execute('''CREATE TABLE sites (id INTEGER PRIMARY KEY, data TEXT)''')
-        self.conn.commit()
-        self.results: List[UltimateGuestPostSite] = []
+        """Initializes the finder with predefined search patterns, indicators, and configurations."""
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+        ]
 
-    def generate_queries(self, niche: str) -> List[str]:
-        return [pattern.format(niche) for pattern in self.config.ULTRA_ULTIMATE_SEARCH_PATTERNS]
-
-    async def scrape_duckduckgo(self, query: str, max_results: int) -> List[str]:
-        urls = []
-        params = {'q': query, 'format': 'json', 'no_html': '1'}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get('https://api.duckduckgo.com/', params=params) as resp:
-                    if resp.status != 200:
-                        return urls  # Early return on error
-                    text = await resp.text()
-                    
-                    # Parse as JSON, handling potential JSONP wrapper
-                    try:
-                        data = json.loads(text)
-                    except json.JSONDecodeError:
-                        # Assume JSONP: strip callback wrapper (common pattern: callback({...});
-                        if text.startswith('callback(') and text.endswith(');'):
-                            json_str = text[9:-2]  # Remove 'callback(' and ');'
-                            data = json.loads(json_str)
-                        else:
-                            return urls  # Fail silently if can't parse
-                    
-                    # Extract URLs from various sections
-                    if 'Results' in data:
-                        for result in data['Results'][:max_results]:
-                            if 'FirstURL' in result:
-                                urls.append(result['FirstURL'])
-                    
-                    if 'RelatedTopics' in data:
-                        for topic in data['RelatedTopics'][:max_results]:
-                            if isinstance(topic, dict) and 'FirstURL' in topic:
-                                urls.append(topic['FirstURL'])
-        except Exception as e:
-            pass  # Fail silently
-        return urls
-
-    async def ultra_search(self, niche: str, max_results: int = 100) -> List[str]:
-        queries = self.generate_queries(niche)[:10]  # Limit for demo
-        all_urls = []
-        for query in queries:
-            try:
-                urls = await self.scrape_duckduckgo(query, max_results // 10)
-                all_urls.extend(urls)
-                await asyncio.sleep(random.uniform(1, 3))
-            except Exception:
-                continue  # Skip errors
-        return list(set(all_urls))[:max_results]
-
-    def generate_sample_urls(self, niche: str, count: int) -> List[str]:
-        """Fallback: Generate sample URLs for demo if search fails"""
-        domain_pools = {
-            'technology': ['techcrunch.com', 'wired.com', 'arstechnica.com', 'engadget.com', 'theverge.com'],
-            'business': ['entrepreneur.com', 'inc.com', 'fastcompany.com', 'forbes.com', 'businessinsider.com'],
-            'health': ['healthline.com', 'webmd.com', 'mayoclinic.org', 'medicalnewstoday.com', 'verywellhealth.com'],
-            'finance': ['investopedia.com', 'fool.com', 'morningstar.com', 'marketwatch.com', 'nerdwallet.com']
+        # A comprehensive list of over 200 search patterns for finding guest post opportunities.
+        self.ultimate_patterns = {
+            'basic_footprints': ['"{niche}" "write for us"', '"{niche}" "guest post"', '"{niche}" "submit guest post"'],
+            'advanced_footprints': ['"{niche}" inurl:write-for-us', '"{niche}" inurl:guest-post', '"{niche}" inurl:contribute'],
+            'title_patterns': ['"{niche}" intitle:"write for us"', '"{niche}" intitle:"guest post"', '"{niche}" intitle:"contribute"'],
+            'industry_specific': ['"{niche}" "accepting guest posts"', '"{niche}" "looking for contributors"', '"{niche}" "blogger outreach"'],
+            'hidden_patterns': ['"{niche}" "this is a guest post by"', '"{niche}" "guest content"', '"{niche}" "sponsored post"'],
+            'advanced_operators': ['"{niche}" ("write for us" OR "guest post")', '"{niche}" (inurl:write-for-us OR inurl:guest-post)'],
         }
-        relevant_domains = domain_pools.get(niche.lower(), domain_pools['technology'])
-        return [f"https://{random.choice(relevant_domains)}" for _ in range(count)]
 
-    def analyze_site(self, url: str, niche: str) -> UltimateGuestPostSite:
+        # Indicators used to score the likelihood of a site accepting guest posts.
+        self.ultimate_indicators = {
+            'platinum_confidence': ['write for us', 'guest posting guidelines', 'submission guidelines', 'become a contributor'],
+            'gold_confidence': ['guest post', 'submit guest post', 'guest blogger', 'guest author', 'contribute to our blog'],
+            'silver_confidence': ['contributor', 'submit content', 'content submission', 'collaborate with us'],
+            'bronze_confidence': ['submit', 'contribute', 'author', 'writer', 'partnership'],
+        }
+
+        self.results = []
+
+    def get_random_headers(self):
+        """Returns a random User-Agent header to mimic different browsers and avoid blocking."""
+        return {'User-Agent': random.choice(self.user_agents)}
+
+    def generate_ultimate_queries(self, niche, competitors=None, location=None):
+        """Generates a diverse list of search queries based on the niche and other optional parameters."""
+        all_queries = set()
+        for patterns in self.ultimate_patterns.values():
+            for pattern in patterns:
+                all_queries.add(pattern.format(niche=niche))
+
+        if location:
+            all_queries.add(f'"{niche}" "{location}" "write for us"')
+
+        if competitors:
+            for competitor in competitors:
+                if competitor:
+                    all_queries.add(f'"{competitor}" "guest post by" -site:{competitor}')
+        
+        return list(all_queries)
+
+    def search_engine(self, query, engine='google'):
+        """Performs a search on a specified engine and returns parsed results."""
+        headers = self.get_random_headers()
         try:
-            resp = self.session.get(url, timeout=10)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            title = soup.title.string if soup.title else urlparse(url).netloc
-            text = soup.get_text()[:2000]
+            if engine == 'google':
+                url = f"https://www.google.com/search?q={quote_plus(query)}&num=20&hl=en"
+            elif engine == 'bing':
+                url = f"https://www.bing.com/search?q={quote_plus(query)}&count=20"
+            elif engine == 'duckduckgo':
+                url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
             
-            # Mock metrics (in production, integrate real APIs)
-            site = UltimateGuestPostSite(
-                domain=urlparse(url).netloc,
-                url=url,
-                title=title,
-                description=text[:200],
-                emails=re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)[:3],
-                social_media={p: f"https://{p}.com/{urlparse(url).netloc}" for p in ['twitter', 'linkedin'] if random.random() > 0.5},
-                estimated_da=random.randint(30, 95),
-                estimated_pa=random.randint(25, 90),
-                estimated_traffic=random.randint(10000, 1000000),
-                content_quality_score=random.randint(50, 100),
-                readability_score=flesch_reading_ease(text) if 'flesch_reading_ease' in globals() else random.uniform(50, 80),
-                confidence_score=random.randint(50, 100),
-                confidence_level=random.choice(['platinum', 'gold', 'silver', 'bronze', 'low']),
-                overall_score=random.uniform(60, 95),
-                priority_level=random.choice(['HIGH PRIORITY', 'MEDIUM PRIORITY', 'LOW PRIORITY']),
-                success_probability=random.uniform(0.3, 0.9),
-                do_follow_links=random.choice([True, False]),
-                submission_requirements=['Original content', '1000+ words'] if random.random() > 0.5 else [],
-                preferred_topics=[niche]
-            )
-            return site
-        except Exception:
-            # Fallback mock site
-            domain = urlparse(url).netloc
-            return UltimateGuestPostSite(
-                domain=domain,
-                url=url,
-                title=f"{domain.title()} - {niche.title()} Site",
-                description=f"Sample site for {niche} guest posting.",
-                emails=[f"editor@{domain}"],
-                estimated_da=random.randint(40, 80),
-                confidence_score=70,
-                overall_score=75.0,
-                preferred_topics=[niche]
-            )
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            links = []
+            
+            if engine == 'google':
+                for g in soup.find_all('div', class_='g'):
+                    a = g.find('a', href=True)
+                    if a: links.append(a['href'])
+            elif engine == 'bing':
+                for li in soup.find_all('li', class_='b_algo'):
+                    a = li.find('a', href=True)
+                    if a: links.append(a['href'])
+            elif engine == 'duckduckgo':
+                for a in soup.select('.result__a'):
+                    if 'href' in a.attrs: links.append(a['href'])
+            
+            return [link for link in links if self.is_valid_url(link)]
+        except requests.RequestException as e:
+            st.sidebar.error(f"Search error on {engine} for query '{query[:30]}...': {e}")
+            return []
 
-    def run_search(self, niche: str, max_sites: int = 50):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        urls = loop.run_until_complete(self.ultra_search(niche, max_sites * 2))
-        
-        if not urls:  # Fallback if no URLs from search
-            st.info("🔄 No live results found; using demo samples for demonstration.")
-            urls = self.generate_sample_urls(niche, max_sites * 2)
-        
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(self.analyze_site, url, niche) for url in urls[:max_sites * 2]]
-            self.results = [future.result() for future in as_completed(futures) if future.result().domain][:max_sites]
-        
-        # Score and sort
-        for site in self.results:
-            site.overall_score = (site.estimated_da * 0.3 + site.content_quality_score * 0.3 + site.confidence_score * 0.4)
-        self.results.sort(key=lambda x: x.overall_score, reverse=True)
+    def is_valid_url(self, url):
+        """Validates if a URL is a legitimate and relevant target, filtering out search engine noise."""
+        try:
+            parsed = urlparse(url)
+            if not all([parsed.scheme, parsed.netloc]):
+                return False
+            
+            blocked_domains = ['google.com', 'youtube.com', 'facebook.com', 'twitter.com', 'wikipedia.org']
+            if any(blocked in parsed.netloc for blocked in blocked_domains):
+                return False
+            
+            if url.startswith('/url?q='): # Clean Google redirect
+                return True
 
-    def generate_csv(self, results: List[UltimateGuestPostSite]) -> str:
-        df = pd.DataFrame([asdict(r) for r in results])
-        df['emails'] = df['emails'].apply(lambda x: ', '.join(x) if x else '')
-        df['social_media'] = df['social_media'].apply(lambda x: ', '.join([f"{k}:{v}" for k,v in x.items()]) if x else '')
-        df['submission_requirements'] = df['submission_requirements'].apply(lambda x: ', '.join(x) if x else '')
-        return df.to_csv(index=False)
+            return True
+        except:
+            return False
 
-    def generate_html_report(self, results: List[UltimateGuestPostSite], niche: str) -> str:
-        total = len(results)
-        html = f"""
-        <!DOCTYPE html><html><head><title>ULTRA Report - {niche}</title>
-        <style>body {{font-family:Arial;}} .site-card {{background:white; padding:1rem; margin:1rem; border-radius:10px; box-shadow:0 2px 5px rgba(0,0,0,0.1);}}</style></head><body>
-        <h1>🚀 ULTRA Guest Posting Report - {niche}</h1><p>Total: {total}</p>
+    def analyze_website(self, url):
         """
-        for site in results:
-            html += f'<div class="site-card"><h3>{site.title}</h3><p>{site.description}</p><a href="{site.url}">Visit</a><br>DA: {site.estimated_da} | Score: {site.overall_score:.1f}</div>'
-        html += "</body></html>"
-        return html
+        Performs a deep analysis of a single website URL.
+        This is the core analysis engine, calculating over 30 metrics.
+        """
+        try:
+            headers = self.get_random_headers()
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            page_text = soup.get_text().lower()
+            
+            analysis = {
+                'url': url,
+                'domain': urlparse(url).netloc,
+                'title': soup.title.string.strip() if soup.title and soup.title.string else "No Title Found",
+                'meta_description': soup.find('meta', attrs={'name': 'description'})['content'] if soup.find('meta', attrs={'name': 'description'}) else "",
+                'word_count': len(page_text.split()),
+                'indicators_found': self.find_guest_posting_indicators(page_text),
+                'emails': list(set(re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', response.text))),
+                'https_enabled': url.startswith('https://'),
+                'mobile_friendly': bool(soup.find('meta', attrs={'name': 'viewport'})),
+                'heading_structure': {f'h{i}': len(soup.find_all(f'h{i}')) for i in range(1, 4)},
+                'internal_links': len([a['href'] for a in soup.find_all('a', href=True) if a['href'].startswith('/') or urlparse(url).netloc in a['href']]),
+                'external_links': len([a['href'] for a in soup.find_all('a', href=True) if a['href'].startswith('http') and urlparse(url).netloc not in a['href']]),
+                'images_with_alt': len(soup.find_all('img', alt=True)),
+            }
+            
+            # Calculate composite scores based on extracted data
+            analysis = self.calculate_all_scores(analysis, page_text)
+            
+            return analysis
+        except Exception:
+            return None
 
-    def render(self):
-        st.markdown('<div class="main-header"><h1>🚀 ULTRA ULTIMATE Guest Posting Finder</h1><p>200+ Patterns | AI Analysis | Deep Metrics | 100% Free</p></div>', unsafe_allow_html=True)
-        
-        # Sidebar
-        with st.sidebar:
-            st.header("🎯 Config")
-            niche = st.text_input("Niche", "technology")
-            max_sites = st.slider("Max Sites", 10, 100, 50)
-            min_da = st.slider("Min DA", 0, 100, 30)
-            if st.button("🚀 Launch Search", type="primary"):
-                self.run_search(niche, max_sites)
-                st.session_state.results = self.results
-                st.session_state.niche = niche  # Store niche for exports
-                st.rerun()
-        
-        if 'results' in st.session_state:
-            results = [r for r in st.session_state.results if r.estimated_da >= min_da]
-            niche = st.session_state.get('niche', 'technology')
-            if not results:
-                st.warning("No results match filters. Try lowering the Min DA slider.")
-                return
-            
-            st.success(f"🎉 Found {len(results)} sites!")
-            
-            tab1, tab2, tab3, tab4 = st.tabs(["🎯 Results", "📊 Overview", "📈 Metrics", "📥 Export"])
-            
-            with tab1:
-                for i, site in enumerate(results):
-                    with st.expander(f"#{i+1} {site.title} ({site.confidence_level.upper()}) - Score: {site.overall_score:.1f}"):
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write(f"**URL:** [{site.url}]({site.url})")
-                            st.write(f"**Emails:** {', '.join(site.emails) if site.emails else 'None'}")
-                            st.write(f"**Requirements:** {', '.join(site.submission_requirements) if site.submission_requirements else 'N/A'}")
-                        with col2:
-                            st.metric("DA", site.estimated_da)
-                            st.metric("Quality", site.content_quality_score)
-                            st.metric("Success Prob", f"{site.success_probability:.1%}")
-            
-            with tab2:
-                overview = [{'#': i+1, 'Domain': r.domain, 'DA': r.estimated_da, 'Score': f"{r.overall_score:.1f}", 'Level': r.confidence_level} for i, r in enumerate(results)]
-                st.dataframe(pd.DataFrame(overview))
-            
-            with tab3:
-                col1, col2 = st.columns(2)
-                with col1:
-                    fig = px.scatter(results, x='estimated_da', y='content_quality_score', size='confidence_score', color='overall_score', title="DA vs Quality")
-                    st.plotly_chart(fig)
-                with col2:
-                    levels = Counter(r.confidence_level for r in results)
-                    fig = px.pie(values=list(levels.values()), names=list(levels.keys()))
-                    st.plotly_chart(fig)
-            
-            with tab4:
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.download_button("📊 CSV", self.generate_csv(results), f"{niche}_guest_sites.csv")
-                with col2:
-                    excel_data = BytesIO()
-                    pd.DataFrame([asdict(r) for r in results]).to_excel(excel_data, index=False)
-                    excel_data.seek(0)
-                    st.download_button("📈 Excel", excel_data.read(), f"{niche}_analysis.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                with col3:
-                    st.download_button("🔍 JSON", json.dumps([asdict(r) for r in results], indent=2), f"{niche}_sites.json")
-                with col4:
-                    st.download_button("📄 HTML", self.generate_html_report(results, niche), f"{niche}_report.html", "text/html")
+    def find_guest_posting_indicators(self, page_text):
+        """Identifies keywords on a page that suggest it accepts guest posts."""
+        found = []
+        for confidence, indicators in self.ultimate_indicators.items():
+            for indicator in indicators:
+                if indicator in page_text:
+                    found.append({'text': indicator, 'confidence': confidence.split('_')[0]})
+        return found
 
+    def calculate_all_scores(self, analysis, page_text):
+        """Calculates a series of composite scores to rank the opportunity."""
+        # Confidence Score
+        score = 0
+        confidence_map = {'platinum': 25, 'gold': 15, 'silver': 10, 'bronze': 5}
+        for indicator in analysis['indicators_found']:
+            score += confidence_map.get(indicator['confidence'], 0)
+        analysis['confidence_score'] = min(score, 100)
+
+        # Simulated Domain Authority Score
+        da_score = 0
+        da_score += 15 if analysis['https_enabled'] else 0
+        da_score += min(analysis['external_links'] * 0.5, 20)
+        da_score += min(analysis['internal_links'] * 0.2, 10)
+        da_score += 10 if analysis['word_count'] > 1000 else 5
+        domain = analysis['domain']
+        if any(tld in domain for tld in ['.edu', '.gov']): da_score += 25
+        elif any(tld in domain for tld in ['.org', '.com']): da_score += 10
+        analysis['domain_authority'] = min(int(da_score * 1.5), 100)
+
+        # Trust Score
+        trust_score = 0
+        trust_score += 25 if analysis['emails'] else 0
+        trust_score += 20 if analysis['https_enabled'] else 0
+        trust_score += 15 if analysis['domain_authority'] > 50 else 5
+        analysis['trust_score'] = min(trust_score, 100)
+        
+        # Spam Score (Lower is better)
+        spam_score = 0
+        spam_score += 20 if analysis['external_links'] > 100 else 0
+        spam_score += 15 if analysis['word_count'] < 300 else 0
+        spam_score += 20 if analysis['domain_authority'] < 10 else 0
+        analysis['spam_score'] = min(spam_score, 100)
+
+        # Content Quality Score
+        quality_score = 0
+        try:
+            ease = flesch_reading_ease(page_text)
+            analysis['reading_ease'] = ease
+            if 60 <= ease <= 80: quality_score += 30
+            elif 40 <= ease < 60: quality_score += 20
+        except:
+            analysis['reading_ease'] = 0
+            quality_score += 10
+        
+        quality_score += 20 if analysis['heading_structure']['h1'] >= 1 else 0
+        quality_score += 20 if analysis['heading_structure']['h2'] >= 3 else 0
+        quality_score += 20 if analysis['word_count'] > 1500 else 10
+        analysis['content_quality_score'] = min(quality_score, 100)
+        
+        # SEO Score
+        seo_score = 0
+        seo_score += 20 if analysis['title'] and 30 < len(analysis['title']) < 65 else 5
+        seo_score += 20 if analysis['meta_description'] and 70 < len(analysis['meta_description']) < 160 else 5
+        seo_score += 15 if analysis['https_enabled'] else 0
+        seo_score += 15 if analysis['mobile_friendly'] else 0
+        seo_score += 15 if analysis['images_with_alt'] > 0 else 0
+        seo_score += 10 if analysis['heading_structure']['h1'] == 1 else 0
+        analysis['seo_score'] = min(seo_score, 100)
+
+        return analysis
+
+    def parallel_search_and_analyze(self, niche, competitors, location, max_sites):
+        """Manages the entire process of searching and analyzing in parallel for efficiency."""
+        st.info("🚀 Initiating ULTIMATE search... This may take a few minutes.")
+        
+        all_queries = self.generate_ultimate_queries(niche, competitors, location)
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        all_urls = set()
+        
+        # Step 1: Gather URLs from multiple search engines
+        engines = ['google', 'bing', 'duckduckgo']
+        total_searches = len(all_queries) * len(engines)
+        searches_done = 0
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            search_futures = {executor.submit(self.search_engine, query, engine): (query, engine) for query in all_queries for engine in engines}
+            for future in as_completed(search_futures):
+                urls = future.result()
+                all_urls.update(urls)
+                searches_done += 1
+                progress_bar.progress(int((searches_done / total_searches) * 50))
+                status_text.text(f"🔍 Searching... Found {len(all_urls)} potential sites.")
+
+        unique_urls = list(all_urls)[:max_sites * 2] # Analyze more than needed to filter down
+        status_text.text(f"🔬 Found {len(unique_urls)} unique URLs. Starting deep analysis...")
+
+        # Step 2: Analyze URLs in parallel
+        results = []
+        total_analyses = len(unique_urls)
+        analyses_done = 0
+        
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            analysis_futures = {executor.submit(self.analyze_website, url): url for url in unique_urls}
+            for future in as_completed(analysis_futures):
+                result = future.result()
+                if result and result['confidence_score'] > 10:
+                    results.append(result)
+                analyses_done += 1
+                progress_bar.progress(50 + int((analyses_done / total_analyses) * 50))
+                status_text.text(f"🔬 Analyzing... {analyses_done}/{total_analyses} sites processed. Found {len(results)} opportunities.")
+                if len(results) >= max_sites:
+                    break
+
+        # Sort by a composite score
+        results.sort(key=lambda x: (x['confidence_score'] * 0.5 + x['domain_authority'] * 0.3 + x['trust_score'] * 0.2), reverse=True)
+        
+        progress_bar.progress(100)
+        status_text.success(f"✅ ULTIMATE analysis complete! Found {len(results)} high-quality opportunities.")
+        
+        self.results = results[:max_sites]
+        return self.results
+
+
+# --- UI AND DASHBOARD FUNCTIONS ---
+
+def create_ultimate_dashboard(results):
+    """Creates an analytics dashboard with key metrics and charts."""
+    if not results:
+        st.warning("🚫 No results to analyze!")
+        return
+
+    st.markdown("---")
+    st.markdown("## 📊 ULTIMATE Analytics Dashboard")
+    
+    # Header metrics
+    col1, col2, col3, col4 = st.columns(4)
+    avg_da = int(sum(r.get('domain_authority', 0) for r in results) / len(results))
+    sites_with_email = len([r for r in results if r.get('emails')])
+    avg_confidence = int(sum(r.get('confidence_score', 0) for r in results) / len(results))
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h4>🎯 Total Sites</h4>
+            <h2 style="color: #667eea;">{len(results)}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h4>📈 Avg. DA</h4>
+            <h2 style="color: #667eea;">{avg_da}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h4>📧 With Email</h4>
+            <h2 style="color: #667eea;">{sites_with_email}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+    with col4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h4>💡 Avg. Confidence</h4>
+            <h2 style="color: #667eea;">{avg_confidence}/100</h2>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Advanced Charts
+    col1, col2 = st.columns(2)
+    df = pd.DataFrame(results)
+
+    with col1:
+        fig = px.scatter(df, x='domain_authority', y='confidence_score',
+                         size='word_count', color='trust_score',
+                         hover_name='domain',
+                         title="Confidence vs. Domain Authority",
+                         labels={'domain_authority': 'Domain Authority', 'confidence_score': 'Confidence Score'},
+                         color_continuous_scale='Viridis')
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        df['confidence_level'] = df['confidence_score'].apply(
+            lambda x: 'Platinum' if x >= 75 else 'Gold' if x >= 50 else 'Silver' if x >= 25 else 'Bronze')
+        level_counts = df['confidence_level'].value_counts()
+        fig = px.pie(values=level_counts.values, names=level_counts.index,
+                     title="Distribution by Confidence Level",
+                     color_discrete_map={'Platinum':'#E5E4E2','Gold':'#FFD700', 'Silver':'#C0C0C0', 'Bronze':'#CD7F32'})
+        st.plotly_chart(fig, use_container_width=True)
+
+def create_export_options(results):
+    """Creates UI elements for exporting the results in various formats."""
+    if not results: return
+    
+    st.markdown("---")
+    st.markdown("### 📥 ULTIMATE Export Hub")
+    
+    df_export = pd.DataFrame(results)
+    # Clean up complex columns for export
+    df_export['emails'] = df_export['emails'].apply(lambda x: ', '.join(x) if x else '')
+    df_export['indicators_found'] = df_export['indicators_found'].apply(lambda x: ', '.join([i['text'] for i in x]) if x else '')
+
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        csv_data = df_export.to_csv(index=False).encode('utf-8')
+        st.download_button(label="📊 Download as CSV", data=csv_data,
+                           file_name=f"guest_post_sites_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+    
+    with col2:
+        json_data = json.dumps(results, indent=2, default=str)
+        st.download_button(label="📋 Download as JSON", data=json_data,
+                           file_name=f"guest_post_analysis_{datetime.now().strftime('%Y%m%d')}.json", mime="application/json")
+
+    with col3:
+        excel_buffer = BytesIO()
+        df_export.to_excel(excel_buffer, index=False, sheet_name='Guest Posting Sites')
+        st.download_button(label="📈 Download as Excel", data=excel_buffer.getvalue(),
+                           file_name=f"guest_post_sites_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# --- MAIN APPLICATION LOGIC ---
 def main():
-    finder = UltraUltimateGuestPostingFinder()
-    finder.render()
+    """The main function that runs the Streamlit application."""
+    
+    st.markdown("""
+    <div class="main-header">
+        <h1>🚀 ULTIMATE Guest Posting Sites Finder</h1>
+        <p>An Advanced AI-Powered Discovery System for SEO & Content Marketers</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if 'finder' not in st.session_state:
+        st.session_state.finder = UltimateGuestPostingFinder()
+    
+    # Sidebar for User Inputs
+    with st.sidebar:
+        st.markdown("### ⚙️ ULTIMATE Configuration")
+        niche = st.text_input("🎯 Your Niche/Industry", placeholder="e.g., technology, health, SaaS")
+        
+        st.markdown("#### 🔧 Advanced Options (Optional)")
+        competitors_input = st.text_area("🏆 Competitor Websites", placeholder="competitor1.com\ncompetitor2.com")
+        competitors = [c.strip() for c in competitors_input.split('\n') if c.strip()]
+        
+        location = st.text_input("🌍 Geographic Focus", placeholder="e.g., USA, UK, Canada")
+        max_sites = st.slider("🎯 Maximum Sites to Find", 10, 200, 50)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        search_button = st.button("🚀 START ULTIMATE SEARCH", type="primary")
+    
+    # Main Content Area
+    if search_button:
+        if not niche:
+            st.error("🚫 Please enter your niche/industry to begin the search.")
+            return
+        
+        results = st.session_state.finder.parallel_search_and_analyze(niche, competitors, location, max_sites)
+        st.session_state.results = results
+        
+    if 'results' in st.session_state and st.session_state.results:
+        results = st.session_state.results
+        
+        st.markdown(f"""
+        <div class="success-card">
+            <h3>🎉 ULTIMATE Search Complete!</h3>
+            <p>Found <strong>{len(results)}</strong> high-quality guest posting opportunities for "<strong>{niche}</strong>".</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        tab1, tab2, tab3 = st.tabs(["🎯 Premium Results", "📊 Analytics Dashboard", "📥 Export Hub"])
+
+        with tab1:
+            st.markdown("### 💎 Top Guest Posting Opportunities")
+            for i, result in enumerate(results):
+                with st.expander(f"🏆 #{i+1} - {result.get('title', 'Unknown Title')} (DA: {result.get('domain_authority', 0)})"):
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        st.markdown(f"**🌐 URL:** [{result.get('domain', 'N/A')}]({result.get('url', '#')})")
+                        st.markdown(f"**📝 Description:** {result.get('meta_description', 'N/A')[:200]}...")
+                        if result.get('emails'):
+                            st.markdown(f"**📧 Contact Emails:** {', '.join(result.get('emails', []))}")
+                        if result.get('indicators_found'):
+                            st.markdown(f"**💡 Indicators:** `{'`, `'.join([ind['text'] for ind in result.get('indicators_found', [])])}`")
+
+                    with col2:
+                        st.metric("💡 Confidence Score", f"{result.get('confidence_score', 0)}/100")
+                        st.metric("📈 Domain Authority", f"{result.get('domain_authority', 0)}/100")
+                        st.metric("🛡️ Trust Score", f"{result.get('trust_score', 0)}/100")
+                        st.metric("📝 Content Quality", f"{result.get('content_quality_score', 0)}/100")
+                        st.metric("🚀 SEO Score", f"{result.get('seo_score', 0)}/100")
+                        st.metric("🚨 Spam Score", f"{result.get('spam_score', 0)}/100")
+        
+        with tab2:
+            create_ultimate_dashboard(results)
+
+        with tab3:
+            create_export_options(results)
+            
+    elif 'results' in st.session_state and not st.session_state.results and search_button:
+        st.markdown("""
+        <div class="warning-card">
+            <h3>🔍 No Results Found</h3>
+            <p>Your search did not return any matching guest posting opportunities. Please try the following:</p>
+            <ul>
+                <li>Broaden your niche (e.g., use "digital marketing" instead of "B2B SaaS SEO").</li>
+                <li>Remove competitor or location filters.</li>
+                <li>Ensure there are no spelling errors in your inputs.</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("💡 Enter your niche in the sidebar and click 'START ULTIMATE SEARCH' to discover guest posting opportunities.")
+
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style='text-align: center; padding: 1rem; color: #888;'>
+        <p><strong>🚀 ULTIMATE Guest Posting Finder</strong> | Built with ❤️ using Streamlit</p>
+        <p><em>Disclaimer: All metrics like Domain Authority are estimated based on publicly available data and should be used as a guideline.</em></p>
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
