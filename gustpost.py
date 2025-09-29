@@ -8,20 +8,12 @@ from bs4 import BeautifulSoup
 import re
 from datetime import datetime
 import json
-from urllib.parse import urlparse, quote_plus, unquote
+from urllib.parse import urlparse, quote_plus
 import plotly.express as px
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 import random
 import whois
-
-# Attempt to import textstat for readability scores
-try:
-    from textstat import flesch_reading_ease
-except ImportError:
-    st.sidebar.warning("`textstat` not found. Readability scores disabled. Install with `pip install textstat`.")
-    def flesch_reading_ease(text):
-        return 0 # Fallback function
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -69,10 +61,9 @@ class UltimateGuestPostingFinder:
             'industry_specific': ['"{niche}" "accepting guest posts"', '"{niche}" "looking for contributors"'],
         }
         self.ultimate_indicators = {
-            'platinum_confidence': ['write for us', 'guest posting guidelines', 'submission guidelines'],
-            'gold_confidence': ['guest post', 'submit guest post', 'guest author'],
-            'silver_confidence': ['contributor', 'submit content', 'collaborate with us'],
-            'bronze_confidence': ['submit', 'contribute', 'author'],
+            'platinum': ['write for us', 'guest posting guidelines', 'submission guidelines'],
+            'gold': ['guest post', 'submit guest post', 'guest author'],
+            'silver': ['contributor', 'submit content', 'collaborate with us'],
         }
 
     def get_random_headers(self):
@@ -89,15 +80,10 @@ class UltimateGuestPostingFinder:
                 if competitor: all_queries.add(f'"{competitor}" "guest post by" -site:{competitor}')
         return list(all_queries)
 
-    def search_duckduckgo_api(self, query):
-        """More reliable search using DuckDuckGo's JSON API."""
+    def search_ddg_api(self, query):
+        """PRIMARY SEARCH METHOD: Uses the reliable DuckDuckGo JSON API."""
         headers = self.get_random_headers()
-        params = {
-            'q': query,
-            'format': 'json',
-            'no_html': '1',
-            'skip_disambig': '1'
-        }
+        params = {'q': query, 'format': 'json', 'no_html': '1', 'skip_disambig': '1'}
         try:
             response = requests.get("https://api.duckduckgo.com/", headers=headers, params=params, timeout=10)
             response.raise_for_status()
@@ -108,42 +94,26 @@ class UltimateGuestPostingFinder:
             st.sidebar.warning("DuckDuckGo API call failed.")
             return []
 
-    def scrape_search_engine(self, query, engine):
-        """Less reliable scraping for Google and Bing as backup."""
+    def search_startpage(self, query):
+        """SECONDARY SEARCH METHOD: Scrapes Startpage for Google-quality results."""
         headers = self.get_random_headers()
+        url = f"https://www.startpage.com/sp/search?q={quote_plus(query)}"
         try:
-            if engine == 'google':
-                url = f"https://www.google.com/search?q={quote_plus(query)}&num=20&hl=en"
-            elif engine == 'bing':
-                url = f"https://www.bing.com/search?q={quote_plus(query)}&count=20"
-            else:
-                return []
-            
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, headers=headers, timeout=15)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, 'html.parser')
-            links = []
-            
-            if engine == 'google':
-                # More robust selector
-                for a in soup.select('a[href^="/url?q="]'): 
-                    try:
-                        links.append(unquote(a['href'].split('/url?q=')[1].split('&')[0]))
-                    except IndexError: continue
-            elif engine == 'bing':
-                for a in soup.select('li.b_algo h2 a'): links.append(a['href'])
-            
+            links = [a['href'] for a in soup.select('a.result-link')]
             return [link for link in links if self.is_valid_url(link)]
         except requests.RequestException:
-            st.sidebar.warning(f"{engine.title()} scraper failed. It may be blocking requests.")
+            st.sidebar.warning("Startpage scraper failed.")
             return []
 
     def is_valid_url(self, url):
         try:
             parsed = urlparse(url)
             if not all([parsed.scheme, parsed.netloc]): return False
-            blocked_domains = ['google.com', 'youtube.com', 'facebook.com', 'twitter.com', 'wikipedia.org']
-            return not any(blocked in parsed.netloc for blocked in blocked_domains)
+            blocked = ['google.com', 'youtube.com', 'facebook.com', 'twitter.com', 'wikipedia.org']
+            return not any(b in parsed.netloc for b in blocked)
         except:
             return False
 
@@ -153,10 +123,10 @@ class UltimateGuestPostingFinder:
             creation_date = domain_info.creation_date
             if isinstance(creation_date, list): creation_date = creation_date[0]
             if creation_date:
-                age_years = (datetime.now() - creation_date).days / 365.25
-                if age_years > 10: return 15
-                elif age_years > 5: return 10
-                elif age_years > 2: return 5
+                age = (datetime.now() - creation_date).days / 365.25
+                if age > 10: return 15
+                elif age > 5: return 10
+                elif age > 2: return 5
         except Exception: pass
         return 2
 
@@ -172,11 +142,9 @@ class UltimateGuestPostingFinder:
             analysis = {
                 'url': url, 'domain': urlparse(url).netloc,
                 'title': soup.title.string.strip() if soup.title and soup.title.string else "No Title",
-                'word_count': len(page_text.split()),
                 'indicators_found': self.find_guest_posting_indicators(page_text),
                 'emails': list(set(re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', response.text))),
                 'https_enabled': url.startswith('https://'),
-                'external_links': len([a['href'] for a in soup.find_all('a', href=True) if a['href'].startswith('http') and urlparse(url).netloc not in a['href']]),
             }
             
             analysis = self.calculate_all_scores(analysis)
@@ -189,22 +157,22 @@ class UltimateGuestPostingFinder:
         for confidence, indicators in self.ultimate_indicators.items():
             for indicator in indicators:
                 if indicator in page_text:
-                    found.append({'text': indicator, 'confidence': confidence.split('_')[0]})
+                    found.append({'text': indicator, 'confidence': confidence})
         return found
 
     def calculate_all_scores(self, analysis):
-        score = sum({'platinum': 25, 'gold': 15, 'silver': 10, 'bronze': 5}.get(ind['confidence'], 0) for ind in analysis['indicators_found'])
+        score = sum({'platinum': 25, 'gold': 15, 'silver': 10}.get(ind['confidence'], 0) for ind in analysis['indicators_found'])
         analysis['confidence_score'] = min(score, 100)
         
-        da_score = self.get_domain_age_score(analysis['domain']) + (15 if analysis['https_enabled'] else 0) + min(analysis['external_links'], 20)
+        da_score = self.get_domain_age_score(analysis['domain']) + (15 if analysis['https_enabled'] else 0)
         if any(tld in analysis['domain'] for tld in ['.edu', '.gov']): da_score += 25
-        analysis['domain_authority'] = min(int(da_score * 1.6), 100)
+        analysis['domain_authority'] = min(int(da_score * 2.0), 100)
 
         analysis['trust_score'] = min((30 if analysis['emails'] else 0) + (20 if analysis['https_enabled'] else 0) + (15 if analysis['domain_authority'] > 50 else 5), 100)
         return analysis
 
     def parallel_search_and_analyze(self, niche, competitors, location, max_sites):
-        st.info("🚀 Initiating ULTIMATE search... This may take a few minutes.")
+        st.info("🚀 Initiating ULTIMATE search with reliable engines...")
         progress_bar = st.progress(0)
         status_text = st.empty()
         
@@ -212,38 +180,39 @@ class UltimateGuestPostingFinder:
         all_urls = set()
         
         with ThreadPoolExecutor(max_workers=15) as executor:
-            # Prioritize the reliable API
-            api_futures = {executor.submit(self.search_duckduckgo_api, query) for query in all_queries}
-            # Add less reliable scrapers as backup
-            scrape_futures = {executor.submit(self.scrape_search_engine, query, engine) for query in all_queries for engine in ['google', 'bing']}
+            # Use the two reliable search methods
+            futures = {executor.submit(self.search_ddg_api, query) for query in all_queries}
+            futures.update({executor.submit(self.search_startpage, query) for query in all_queries})
             
-            all_futures = list(api_futures) + list(scrape_futures)
-            for i, future in enumerate(as_completed(all_futures)):
+            for i, future in enumerate(as_completed(futures)):
                 all_urls.update(future.result())
-                progress_bar.progress(int(((i + 1) / len(all_futures)) * 50))
+                progress_bar.progress(int(((i + 1) / len(futures)) * 50))
                 status_text.text(f"🔍 Searching... Found {len(all_urls)} potential sites.")
         
         st.session_state.search_stats['urls_found'] = len(all_urls)
         unique_urls = list(all_urls)[:max_sites * 3]
-        status_text.text(f"🔬 Found {len(unique_urls)} unique URLs. Starting deep analysis...")
         
+        if not unique_urls:
+            status_text.error("Search phase completed but found 0 URLs. The search engines may be down or your niche is very specific.")
+            return []
+
+        status_text.text(f"🔬 Found {len(unique_urls)} unique URLs. Starting deep analysis...")
         results = []
         with ThreadPoolExecutor(max_workers=20) as executor:
             analysis_futures = {executor.submit(self.analyze_website, url) for url in unique_urls}
             for i, future in enumerate(as_completed(analysis_futures)):
                 result = future.result()
-                if result: # Keep all successfully analyzed results
-                    results.append(result)
+                if result: results.append(result)
                 progress_bar.progress(50 + int(((i + 1) / len(analysis_futures)) * 50))
                 status_text.text(f"🔬 Analyzing... {i+1}/{len(analysis_futures)} sites processed. Found {len(results)} opportunities.")
-                if len(results) >= max_sites * 1.5:
-                    for f in analysis_futures: f.cancel()
-                    break
         
         st.session_state.search_stats['sites_analyzed'] = len(results)
-        results.sort(key=lambda x: (x.get('confidence_score', 0) * 0.6 + x.get('domain_authority', 0) * 0.4), reverse=True)
-        final_results = results[:max_sites]
-        status_text.success(f"✅ ULTIMATE analysis complete! Found {len(final_results)} high-quality opportunities.")
+        # Filter and sort only after all analysis is complete
+        filtered_results = [r for r in results if r.get('confidence_score', 0) > 0]
+        filtered_results.sort(key=lambda x: (x.get('confidence_score', 0) * 0.6 + x.get('domain_authority', 0) * 0.4), reverse=True)
+        
+        final_results = filtered_results[:max_sites]
+        status_text.success(f"✅ ULTIMATE analysis complete! Found {len(final_results)} guest posting opportunities.")
         return final_results
 
 # --- UI AND DASHBOARD FUNCTIONS ---
@@ -251,7 +220,7 @@ def create_ultimate_dashboard(results):
     st.markdown("---")
     st.markdown("## 📊 ULTIMATE Analytics Dashboard")
     if not results:
-        st.warning("🚫 No results to analyze!")
+        st.warning("🚫 No results to display on dashboard.")
         return
     
     col1, col2, col3, col4 = st.columns(4)
@@ -265,7 +234,7 @@ def create_ultimate_dashboard(results):
     col4.metric("💡 Avg. Confidence", f"{avg_confidence}/100")
 
     df = pd.DataFrame(results)
-    fig = px.scatter(df, x='domain_authority', y='confidence_score', size='word_count', color='trust_score', hover_name='domain', title="Confidence vs. Domain Authority")
+    fig = px.scatter(df, x='domain_authority', y='confidence_score', color='trust_score', hover_name='domain', title="Confidence vs. Domain Authority")
     st.plotly_chart(fig, use_container_width=True)
 
 def create_export_options(results):
@@ -288,14 +257,14 @@ def create_export_options(results):
 
 # --- MAIN APPLICATION LOGIC ---
 def main():
-    st.markdown('<div class="main-header"><h1>🚀 ULTIMATE Guest Posting Sites Finder</h1><p>An Advanced AI-Powered Discovery System for SEO & Content Marketers</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header"><h1>🚀 ULTIMATE Guest Posting Finder</h1><p>A Reliable AI-Powered Discovery System</p></div>', unsafe_allow_html=True)
     
     if 'finder' not in st.session_state:
         st.session_state.finder = UltimateGuestPostingFinder()
     
     with st.sidebar:
         st.markdown("### ⚙️ ULTIMATE Configuration")
-        niche = st.text_input("🎯 Your Niche/Industry", placeholder="e.g., technology, health, SaaS")
+        niche = st.text_input("🎯 Your Niche/Industry", placeholder="e.g., health, technology, finance")
         st.markdown("#### 🔧 Advanced Options (Optional)")
         competitors = [c.strip() for c in st.text_area("🏆 Competitor Websites", placeholder="competitor1.com\ncompetitor2.com").split('\n') if c.strip()]
         location = st.text_input("🌍 Geographic Focus", placeholder="e.g., USA, UK, Canada")
@@ -311,13 +280,13 @@ def main():
         if not niche:
             st.error("🚫 Please enter your niche/industry to begin the search.")
         else:
-            st.session_state.search_stats = {'urls_found': 0, 'sites_analyzed': 0} # Reset stats
+            st.session_state.search_stats = {'urls_found': 0, 'sites_analyzed': 0}
             st.session_state.results = st.session_state.finder.parallel_search_and_analyze(niche, competitors, location, max_sites)
     
     if st.session_state.results is not None:
         results = st.session_state.results
         if results:
-            st.markdown(f'<div class="success-card"><h3>🎉 ULTIMATE Search Complete!</h3><p>Found <strong>{len(results)}</strong> high-quality guest posting opportunities for "<strong>{niche}</strong>".</p></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="success-card"><h3>🎉 ULTIMATE Search Complete!</h3><p>Found <strong>{len(results)}</strong> high-quality opportunities for "<strong>{niche}</strong>".</p></div>', unsafe_allow_html=True)
             
             tab1, tab2, tab3 = st.tabs(["🎯 Premium Results", "📊 Analytics Dashboard", "📥 Export Hub"])
             with tab1:
@@ -326,8 +295,7 @@ def main():
                         col1, col2 = st.columns([2, 1])
                         with col1:
                             st.markdown(f"**🌐 URL:** [{result.get('domain', 'N/A')}]({result.get('url', '#')})")
-                            if result.get('emails'):
-                                st.markdown(f"**📧 Contact Emails:** {', '.join(result.get('emails', []))}")
+                            if result.get('emails'): st.markdown(f"**📧 Contact Emails:** {', '.join(result.get('emails', []))}")
                         with col2:
                             st.metric("💡 Confidence", f"{result.get('confidence_score', 0)}/100")
                             st.metric("📈 Domain Authority", f"{result.get('domain_authority', 0)}/100")
@@ -337,10 +305,7 @@ def main():
                 create_export_options(results)
         else:
             stats = st.session_state.search_stats
-            st.markdown('<div class="warning-card"><h3>🔍 No Results Found</h3><p>Your search returned no opportunities. Please try the following:</p><ul><li>Use a broader niche (e.g., "health" instead of "Ayurvedic wellness for seniors").</li><li>Remove competitor or location filters.</li><li>Search engines may be blocking requests. Please try again in a few minutes.</li></ul></div>', unsafe_allow_html=True)
-            if stats['urls_found'] > 0 and stats['sites_analyzed'] == 0:
-                st.warning(f"**Analysis Note:** We found {stats['urls_found']} potential URLs, but none passed the analysis phase. This might indicate the sites found were not relevant guest post opportunities.")
-
+            st.markdown('<div class="warning-card"><h3>🔍 No Results Found</h3><p>Your search returned no opportunities. Here is a summary of the search:</p><ul><li>Potential URLs found: <strong>{stats["urls_found"]}</strong></li><li>Sites that passed analysis: <strong>{stats["sites_analyzed"]}</strong></li></ul><p><strong>Suggestions:</strong></p><ul><li>Use a broader niche (e.g., "health" instead of "Ayurvedic wellness for seniors").</li><li>Remove competitor or location filters.</li><li>If URLs Found is 0, the search engines may be temporarily unavailable. Please try again in a few minutes.</li></ul></div>'.format(stats=stats), unsafe_allow_html=True)
     else:
         st.info("💡 Enter your niche in the sidebar and click 'START' to discover opportunities.")
 
