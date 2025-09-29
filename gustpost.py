@@ -1,165 +1,53 @@
+# gustpost_streamlit.py
+# Streamlit web UI for the Ultra-Advanced Guest Post Finder
+# Single-file Streamlit app suitable for GitHub + Streamlit Cloud deployment
 
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-gustpost.py
------------
-Ultra-advanced Guest Post / "Write for Us" finder.
-
-Features
-- Massive search footprints (title/url/text/filetype + multilingual).
-- Smart query generation with synonyms and language variants.
-- Optional SERP API (SerpApi) support; DuckDuckGo HTML fallback.
-- On-page verification (regex) + heuristic scoring (+ optional embeddings boost).
-- Deduping (domain + canonical), export to CSV/JSON, and configurable thresholds.
-- Rate limiting, random user agents, polite delays.
-
-Usage (examples):
-  python gustpost.py --keywords "health,fitness" --country US --lang en --limit 10 --out results.csv
-  python gustpost.py --keywords-file keywords.txt --use-duck --limit 20 --json results.json
-  python gustpost.py --keywords "ai,blockchain" --serpapi-key YOUR_KEY --limit 30 --tld com --qdr m6
-
-Notes:
-- For SERP API, pass --serpapi-key or set env SERPAPI_KEY.
-- Embedding boost is optional: install 'sentence-transformers' or set OPENAI_API_KEY and use --embeddings openai
-"""
-
-import os
+import streamlit as st
+import time
+import random
 import re
 import csv
-import sys
-import time
 import json
-import math
-import html
-import random
-import argparse
 import urllib.parse as up
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Iterable, Optional, Tuple, Set
+from dataclasses import dataclass
+from typing import List, Dict, Tuple, Optional, Set
 from datetime import datetime
-from collections import defaultdict
 
-# Optional imports guarded for environments that don't have them
+# Optional imports
 try:
     import requests
-except Exception:  # pragma: no cover
+    from bs4 import BeautifulSoup
+    import pandas as pd
+except Exception:
     requests = None
-
-try:
-    from bs4 import BeautifulSoup  # type: ignore
-except Exception:  # pragma: no cover
     BeautifulSoup = None
+    pd = None
 
 # -----------------------------
-# Patterns & configuration
+# Config / Patterns (same logic as CLI version)
 # -----------------------------
-
-ADVANCED_PATTERNS: List[str] = [
-    # Core exact footprints
+ADVANCED_PATTERNS = [
     '"{}" "write for us"',
-    '"{}" "write for us guidelines"',
     '"{}" "guest post"',
-    '"{}" "guest posting"',
-    '"{}" "guest author"',
-    '"{}" "guest contributor"',
     '"{}" "submit article"',
-    '"{}" "submit an article"',
-    '"{}" "submit post"',
-    '"{}" "submit your article"',
-    '"{}" "send your article"',
-    '"{}" "accepting guest posts"',
-    '"{}" "accepting articles"',
-    '"{}" "submission guidelines"',
-    '"{}" "guest posting guidelines"',
-    '"{}" "editorial guidelines"',
-    '"{}" "content guidelines"',
-    '"{}" "publish your article"',
-    '"{}" "become a contributor"',
-    '"{}" "pitch us"',
-    '"{}" "pitch an article"',
-    '"{}" "looking for writers"',
-    '"{}" "writers wanted"',
-    # URL footprints
     '"{}" inurl:write-for-us',
-    '"{}" inurl:write_for_us',
-    '"{}" inurl:guest-post',
-    '"{}" inurl:guest_post',
-    '"{}" inurl:guest-contributor',
-    '"{}" inurl:submit-article',
-    '"{}" inurl:submit-guest-post',
-    '"{}" inurl:submission-guidelines',
-    '"{}" inurl:contribute',
-    '"{}" inurl:become-a-contributor',
-    # Title footprints
     '"{}" intitle:"write for us"',
-    '"{}" intitle:"submit article"',
-    '"{}" intitle:"guest post"',
-    '"{}" intitle:"become a contributor"',
-    '"{}" intitle:"contribute"',
-    # Boolean groups
-    '"{}" (intitle:"write for us" OR inurl:write-for-us OR "guest post")',
-    '("{}") ("write for us" OR "guest post" OR "submit article" OR "contribute")',
-    # Wildcards
-    '"{}" "write for *"',
-    # Proximity (AROUND)
-    '"{}" AROUND(3) "write for us"',
-    '"{}" AROUND(6) "submit" "article"',
-    # Filetypes
     '"{}" filetype:pdf "submission guidelines"',
-    '"{}" filetype:pdf "editorial policy"',
-    '"{}" filetype:doc "submission guidelines"',
-    # Sitemaps / RSS
-    '"{}" "sitemap" "write for us"',
-    '"{}" "rss" "guest post"',
-    # Sponsored / collab
+    '"{}" "accepting guest posts"',
     '"{}" "sponsored post"',
-    '"{}" "paid guest post"',
-    '"{}" "advertise with us"',
-    # EDU/ORG focus
-    '"{}" "write for us" site:*.edu',
-    '"{}" "write for us" site:*.org',
-    # Social platforms
-    '"{}" site:twitter.com "write for us"',
-    '"{}" site:linkedin.com "contribute"',
-    # Niche specific examples
-    '"{}" "medical contributors"',
-    '"{}" "technical writers" "contribute"',
+    '"{}" "writers wanted"',
 ]
-
-SYNONYMS: Dict[str, List[str]] = {
-    "write for us": [
-        "contribute", "guest post", "submit article", "become a contributor",
-        "send your article", "publish your article", "pitch", "write for *"
-    ],
-    "guidelines": [
-        "submission guidelines", "editorial guidelines", "guest posting guidelines",
-        "contribution guidelines", "writer guidelines", "style guide"
-    ],
-    "sponsored": ["paid guest post", "sponsored post", "advertise with us", "sponsored content"]
-}
-
-LANG_VARIANTS: Dict[str, List[str]] = {
-    "es": ["escribe para nosotros", "colabora", "envía tu artículo"],
-    "fr": ["écrire pour nous", "contribuer", "soumettre un article"],
-    "ur": ["ہمارے لیے لکھیں", "مضمون جمع کروائیں", "مدد کریں"],
-    "ar": ["اكتب لنا", "ساهم بمقال", "أرسل مقالك"],
-    "de": ["für uns schreiben", "beitrag einreichen", "gastbeitrag"]
-}
 
 REGEX_ONPAGE = [
     re.compile(r'write\s+for\s+us', re.I),
     re.compile(r'(submit|send)\s+(your\s+)?(article|post|content)', re.I),
     re.compile(r'submission\s+guidelines', re.I),
     re.compile(r'guest\s+(post|posting|author|contributor)', re.I),
-    re.compile(r'(become|join)\s+(a\s+)?(contributor|writer|author|editor)', re.I),
-    re.compile(r'pitch\s+(us|an\s+article)', re.I),
 ]
 
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15',
 ]
 
 WEIGHTS = {
@@ -167,95 +55,60 @@ WEIGHTS = {
     'url_write_for_us': 2.5,
     'filetype_guideline': 2.0,
     'snippet_guidelines': 2.0,
-    'onpage_hits': 0.8,   # multiplied by number of regex hits
-    'recency_boost': 0.5, # if recent year in snippet/title
-    'domain_authority': 2.0,  # placeholder (normalized 0..1)
-    'embedding_sim': 3.0  # optional boost
+    'onpage_hits': 0.8,
 }
 
-THRESHOLDS = {
-    'platinum': 6.0,
-    'gold': 4.0,
-    'silver': 2.0,
-    'bronze': 0.5
-}
+THRESHOLDS = {'platinum': 6.0, 'gold': 4.0, 'silver': 2.0, 'bronze': 0.5}
 
 # -----------------------------
-# Helpers
+# Helpers & core functions
 # -----------------------------
-
-def safe_get(url: str, timeout: int = 12) -> Optional[str]:
-    if requests is None:
-        return None
-    try:
-        headers = {"User-Agent": random.choice(USER_AGENTS)}
-        r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-        if r.status_code == 200 and r.text:
-            return r.text
-    except Exception:
-        return None
-    return None
 
 def extract_domain(url: str) -> str:
     try:
         netloc = up.urlparse(url).netloc.lower()
-        if netloc.startswith("www."):
+        if netloc.startswith('www.'):
             netloc = netloc[4:]
         return netloc
     except Exception:
         return url
 
-def year_in_text(text: str) -> bool:
-    # crude recency signal
-    years = re.findall(r'(20[1-3]\d)', text)
-    return bool(years)
 
 def normalize_url(url: str) -> str:
     try:
         parsed = up.urlparse(url)
         clean_query = up.parse_qsl(parsed.query)
-        # drop utm and tracking params
-        clean_query = [(k, v) for (k, v) in clean_query if not k.lower().startswith(("utm_", "fbclid", "gclid", "mc_", "mkt_"))]
+        clean_query = [(k, v) for (k, v) in clean_query if not k.lower().startswith(('utm_', 'fbclid', 'gclid'))]
         new_q = up.urlencode(clean_query)
-        return up.urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip('/'), '', new_q, ''))
+        return up.urlunparse((parsed.scheme or 'https', parsed.netloc, parsed.path.rstrip('/'), '', new_q, ''))
     except Exception:
         return url
 
-# -----------------------------
-# Query generation
-# -----------------------------
 
-def generate_queries(keywords: List[str],
-                     patterns: List[str],
-                     synonyms_map: Dict[str, List[str]] = SYNONYMS,
-                     lang_map: Dict[str, List[str]] = LANG_VARIANTS) -> List[str]:
-    queries: List[str] = []
+def safe_get(url: str, timeout: int = 12) -> Optional[str]:
+    if requests is None:
+        return None
+    try:
+        headers = {'User-Agent': random.choice(USER_AGENTS)}
+        r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        if r.status_code == 200:
+            return r.text
+    except Exception:
+        return None
+    return None
+
+
+def generate_queries(keywords: List[str], patterns: List[str]) -> List[str]:
+    queries = []
     for kw in keywords:
-        kw = kw.strip()
-        if not kw:
-            continue
         for p in patterns:
-            try:
-                queries.append(p.format(kw))
-            except Exception:
-                continue
-        for s in synonyms_map.get("write for us", []):
-            queries.append(f'"{kw}" "{s}"')
-        for lang_list in lang_map.values():
-            for variant in lang_list:
-                queries.append(f'"{kw}" "{variant}"')
-    # dedupe preserve order
-    seen = set()
-    deduped = []
+            queries.append(p.format(kw))
+    # dedupe
+    seen = set(); out = []
     for q in queries:
         if q not in seen:
-            seen.add(q)
-            deduped.append(q)
-    return deduped
-
-# -----------------------------
-# SERP providers
-# -----------------------------
+            seen.add(q); out.append(q)
+    return out
 
 @dataclass
 class SerpResult:
@@ -263,93 +116,63 @@ class SerpResult:
     title: str
     url: str
     snippet: str
-    position: int
 
-def search_serpapi(query: str, api_key: str, gl: str = "US", hl: str = "en", num: int = 10, tld: str = "com", qdr: Optional[str] = None) -> List[SerpResult]:
-    """Query SerpApi (Google) if available. Requires requests."""
-    if requests is None:
-        return []
-    params = {
-        "engine": "google",
-        "q": query,
-        "api_key": api_key,
-        "num": num,
-        "gl": gl,
-        "hl": hl,
-        "google_domain": f"google.{tld}",
-    }
-    if qdr:
-        params["tbs"] = f"qdr:{qdr}"  # e.g., d7 / m6 / y1
-    try:
-        r = requests.get("https://serpapi.com/search.json", params=params, timeout=18)
-        data = r.json()
-        out: List[SerpResult] = []
-        for pos, item in enumerate(data.get("organic_results", []), start=1):
-            out.append(SerpResult(
-                query=query,
-                title=item.get("title", ""),
-                url=item.get("link", ""),
-                snippet=item.get("snippet", ""),
-                position=pos
-            ))
-        return out
-    except Exception:
-        return []
+@dataclass
+class Candidate:
+    query: str
+    url: str
+    title: str
+    snippet: str
+    domain: str
+    base_score: float
+    onpage_hits: int
+    onpage_boost: float
+    total_score: float
+    label: str
 
-def search_duckduckgo_html(query: str, tld: str = "com", kl: str = "us-en", limit: int = 10) -> List[SerpResult]:
-    """Lightweight HTML scrape of DuckDuckGo (no JS)."""
+# Lightweight SERP via DuckDuckGo HTML
+
+def search_duckduckgo_html(query: str, tld: str = 'com', kl: str = 'us-en', limit: int = 10) -> List[SerpResult]:
+    out = []
     if requests is None or BeautifulSoup is None:
-        return []
+        return out
     try:
-        params = {"q": query, "kl": kl}
-        headers = {"User-Agent": random.choice(USER_AGENTS)}
-        r = requests.get(f"https://duckduckgo.{tld}/html/", params=params, headers=headers, timeout=18)
-        soup = BeautifulSoup(r.text, "html.parser")
-        results = []
-        for pos, res in enumerate(soup.select(".result"), start=1):
-            a = res.select_one(".result__a")
-            if not a: 
-                continue
-            url = a.get("href", "")
-            title = a.get_text(" ", strip=True)
-            snippet_el = res.select_one(".result__snippet")
-            snippet = snippet_el.get_text(" ", strip=True) if snippet_el else ""
-            results.append(SerpResult(query=query, title=title, url=url, snippet=snippet, position=pos))
-            if len(results) >= limit:
-                break
-        return results
+        params = {'q': query, 'kl': kl}
+        headers = {'User-Agent': random.choice(USER_AGENTS)}
+        r = requests.get(f'https://duckduckgo.{tld}/html/', params=params, headers=headers, timeout=15)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        for res in soup.select('.result')[:limit]:
+            a = res.select_one('.result__a')
+            if not a: continue
+            url = a.get('href', '')
+            title = a.get_text(' ', strip=True)
+            snippet_el = res.select_one('.result__snippet')
+            snippet = snippet_el.get_text(' ', strip=True) if snippet_el else ''
+            out.append(SerpResult(query=query, title=title, url=url, snippet=snippet))
     except Exception:
-        return []
+        pass
+    return out
 
-# -----------------------------
-# Scoring & verification
-# -----------------------------
 
 def quick_score(title: str, url: str, snippet: str) -> float:
-    t = (title or "").lower()
-    u = (url or "").lower()
-    s = (snippet or "").lower()
+    t = (title or '').lower(); u = (url or '').lower(); s = (snippet or '').lower()
     score = 0.0
     if 'write for us' in t: score += WEIGHTS['title_exact']
-    if any(k in u for k in ['write-for-us', 'write_for_us', 'guest-post', 'guest_post', 'submission-guidelines', 'submit-guest-post']):
-        score += WEIGHTS['url_write_for_us']
-    if any(ft in s for ft in ['submission guideline', 'editorial guideline']):
-        score += WEIGHTS['snippet_guidelines']
-    if any(url.endswith(ext) for ext in ['.pdf', '.doc', '.docx']):
-        score += WEIGHTS['filetype_guideline']
-    if year_in_text(t) or year_in_text(s):
-        score += WEIGHTS['recency_boost']
+    if any(k in u for k in ['write-for-us','guest-post','submission-guidelines']): score += WEIGHTS['url_write_for_us']
+    if any(ft in s for ft in ['submission guideline','editorial guideline']): score += WEIGHTS['snippet_guidelines']
+    if any(url.lower().endswith(ext) for ext in ['.pdf','.doc','.docx']): score += WEIGHTS['filetype_guideline']
     return score
 
+
 def onpage_verify(url: str) -> Tuple[int, float]:
-    html_text = safe_get(url) or ""
+    html_text = safe_get(url) or ''
     if not html_text:
         return 0, 0.0
     hits = 0
     for rx in REGEX_ONPAGE:
-        if rx.search(html_text):
-            hits += 1
+        if rx.search(html_text): hits += 1
     return hits, hits * WEIGHTS['onpage_hits']
+
 
 def label_from_score(score: float) -> str:
     if score >= THRESHOLDS['platinum']: return 'platinum'
@@ -359,177 +182,116 @@ def label_from_score(score: float) -> str:
     return 'low'
 
 # -----------------------------
-# Pipeline
+# Streamlit UI
 # -----------------------------
 
-@dataclass
-class Candidate:
-    query: str
-    url: str
-    title: str
-    snippet: str
-    domain: str = ""
-    base_score: float = 0.0
-    onpage_hits: int = 0
-    onpage_boost: float = 0.0
-    total_score: float = 0.0
-    label: str = "low"
+st.set_page_config(page_title='GuestPost Finder', layout='wide')
+st.title('GuestPost Finder — Streamlit Web UI')
 
-def process_queries(queries: List[str],
-                    limit_per_query: int,
-                    serpapi_key: Optional[str],
-                    use_duck: bool,
-                    gl: str, hl: str, tld: str, qdr: Optional[str],
-                    polite_delay: float = 1.0) -> List[Candidate]:
-    results: List[Candidate] = []
-    for q in queries:
-        serp_results: List[SerpResult] = []
-        if serpapi_key:
-            serp_results = search_serpapi(q, serpapi_key, gl=gl, hl=hl, num=limit_per_query, tld=tld, qdr=qdr)
-        if (not serp_results) and use_duck:
-            serp_results = search_duckduckgo_html(q, tld=tld, kl=f"{gl.lower()}-{hl.lower()}", limit=limit_per_query)
-        for r in serp_results[:limit_per_query]:
-            url_norm = normalize_url(r.url)
-            c = Candidate(
-                query=q,
-                url=url_norm,
-                title=html.unescape(r.title or ""),
-                snippet=html.unescape(r.snippet or ""),
-                domain=extract_domain(url_norm),
-                base_score=quick_score(r.title, url_norm, r.snippet),
-            )
-            # optional on-page verification (lightweight)
-            hits, boost = onpage_verify(url_norm)
-            c.onpage_hits = hits
-            c.onpage_boost = boost
-            c.total_score = c.base_score + boost
-            c.label = label_from_score(c.total_score)
-            results.append(c)
-        time.sleep(polite_delay + random.random()*0.6)
-    # Deduplicate by (domain, path)
-    seen_urls: Set[str] = set()
-    deduped: List[Candidate] = []
-    for c in results:
-        if c.url in seen_urls:
-            continue
-        seen_urls.add(c.url)
-        deduped.append(c)
-    # Sort by total_score
-    deduped.sort(key=lambda x: x.total_score, reverse=True)
-    return deduped
+with st.sidebar:
+    st.header('Settings')
+    keywords_input = st.text_area('Keywords (comma separated)', value='health,fitness')
+    use_duck = st.checkbox('Use DuckDuckGo fallback', value=True)
+    limit = st.slider('Results per query', min_value=5, max_value=50, value=10)
+    tld = st.text_input('Search TLD', value='com')
+    polite_delay = st.number_input('Delay between queries (s)', min_value=0.1, max_value=10.0, value=1.0)
+    no_onpage = st.checkbox('Skip on-page verification', value=False)
+    serpapi_key = st.text_input('SerpApi Key (optional)', type='password')
+    run_button = st.button('Run Search')
 
-# -----------------------------
-# Export
-# -----------------------------
+col1, col2 = st.columns([2,1])
 
-def export_csv(rows: List[Candidate], path: str) -> None:
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["label","score","domain","url","title","snippet","onpage_hits","query","retrieved_at"])
-        now = datetime.utcnow().isoformat()
-        for c in rows:
-            w.writerow([c.label, f"{c.total_score:.2f}", c.domain, c.url, c.title, c.snippet, c.onpage_hits, c.query, now])
+with col1:
+    st.subheader('Generated Queries (preview)')
+    if keywords_input.strip():
+        keywords = [k.strip() for k in keywords_input.split(',') if k.strip()]
+        queries = generate_queries(keywords, ADVANCED_PATTERNS)
+        st.write(f'Generated {len(queries)} queries')
+        st.code('\n'.join(queries[:200]))
+    else:
+        st.info('Enter keywords at left to preview queries')
 
-def export_json(rows: List[Candidate], path: str) -> None:
-    out = []
-    now = datetime.utcnow().isoformat()
-    for c in rows:
-        out.append({
-            "label": c.label,
-            "score": round(c.total_score, 2),
-            "domain": c.domain,
-            "url": c.url,
-            "title": c.title,
-            "snippet": c.snippet,
-            "onpage_hits": c.onpage_hits,
-            "query": c.query,
-            "retrieved_at": now
-        })
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
+with col2:
+    st.subheader('Quick tips')
+    st.markdown('- Use 1-5 keywords to start.\n- Toggle Skip on-page if it is too slow.\n- Provide SerpApi key for Google results (faster & more reliable).')
 
-# -----------------------------
-# CLI
-# -----------------------------
+# Results area
+placeholder = st.empty()
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Ultra-advanced Guest Post finder")
-    p.add_argument("--keywords", type=str, default="", help="Comma-separated keywords (e.g., 'health,fitness')")
-    p.add_argument("--keywords-file", type=str, help="Text file with one keyword per line")
-    p.add_argument("--limit", type=int, default=10, help="Max results per query from SERP")
-    p.add_argument("--country", "--gl", dest="gl", type=str, default="US", help="Country code (gl)")
-    p.add_argument("--lang", "--hl", dest="hl", type=str, default="en", help="Language code (hl)")
-    p.add_argument("--tld", type=str, default="com", help="Search engine TLD (e.g., com, co.uk)")
-    p.add_argument("--qdr", type=str, default=None, help="Recency filter for Google via SerpApi (e.g., d7, m6, y1)")
-    p.add_argument("--serpapi-key", type=str, default=os.getenv("SERPAPI_KEY"), help="SerpApi key (or env SERPAPI_KEY)")
-    p.add_argument("--use-duck", action="store_true", help="Use DuckDuckGo HTML fallback if SerpApi unavailable")
-    p.add_argument("--patterns-min", type=int, default=0, help="Use only first N patterns (for quick tests)")
-    p.add_argument("--out", type=str, help="CSV output file")
-    p.add_argument("--json", type=str, help="JSON output file")
-    p.add_argument("--no-onpage", action="store_true", help="Skip on-page regex verification")
-    p.add_argument("--polite-delay", type=float, default=1.0, help="Delay between queries (seconds)")
-    return p.parse_args()
+if run_button:
+    if not keywords_input.strip():
+        st.warning('Enter at least one keyword in the sidebar')
+    else:
+        keywords = [k.strip() for k in keywords_input.split(',') if k.strip()]
+        queries = generate_queries(keywords, ADVANCED_PATTERNS)
+        total_queries = len(queries)
+        st.info(f'Starting search for {len(keywords)} keywords => {total_queries} queries')
 
-def main() -> None:
-    args = parse_args()
+        # Iterate queries and collect candidates
+        candidates = []
+        progress = st.progress(0)
+        p = 0
+        for i, q in enumerate(queries):
+            serp_results = []
+            if serpapi_key:
+                # lightweight: call SerpApi if key provided
+                try:
+                    params = {
+                        'engine': 'google', 'q': q, 'api_key': serpapi_key, 'num': limit,
+                    }
+                    r = requests.get('https://serpapi.com/search.json', params=params, timeout=18)
+                    data = r.json()
+                    for item in data.get('organic_results', [])[:limit]:
+                        serp_results.append(SerpResult(query=q, title=item.get('title',''), url=item.get('link',''), snippet=item.get('snippet','')))
+                except Exception:
+                    serp_results = []
+            if (not serp_results) and use_duck:
+                serp_results = search_duckduckgo_html(q, tld=tld, kl='us-en', limit=limit)
 
-    if not args.keywords and not args.keywords_file:
-        print("Please provide --keywords or --keywords-file", file=sys.stderr)
-        sys.exit(1)
+            for r in serp_results[:limit]:
+                u_norm = normalize_url(r.url)
+                base = quick_score(r.title, u_norm, r.snippet)
+                hits, boost = (0, 0.0) if no_onpage else onpage_verify(u_norm)
+                total = base + boost
+                cand = Candidate(query=q, url=u_norm, title=r.title[:200], snippet=r.snippet[:300], domain=extract_domain(u_norm), base_score=base, onpage_hits=hits, onpage_boost=boost, total_score=total, label=label_from_score(total))
+                candidates.append(cand)
 
-    # Build keyword list
-    keywords: List[str] = []
-    if args.keywords:
-        keywords.extend([k.strip() for k in args.keywords.split(",") if k.strip()])
-    if args.keywords_file and os.path.exists(args.keywords_file):
-        with open(args.keywords_file, "r", encoding="utf-8") as f:
-            keywords.extend([line.strip() for line in f if line.strip()])
-    keywords = list(dict.fromkeys(keywords))  # dedupe
+            # polite delay
+            time.sleep(polite_delay + random.random()*0.6)
+            p = int(((i+1)/total_queries)*100)
+            progress.progress(min(p, 100))
 
-    # Choose patterns subset if requested
-    patterns = ADVANCED_PATTERNS[:args.patterns_min] if args.patterns_min > 0 else ADVANCED_PATTERNS
+        # Deduplicate and sort
+        seen: Set[str] = set(); final = []
+        for c in candidates:
+            if c.url in seen: continue
+            seen.add(c.url); final.append(c)
+        final.sort(key=lambda x: x.total_score, reverse=True)
 
-    queries = generate_queries(keywords, patterns, SYNONYMS, LANG_VARIANTS)
-    print(f"[i] Generated {len(queries)} queries from {len(keywords)} keywords.")
+        st.success(f'Collected {len(final)} candidates')
 
-    # Toggle on-page verify if requested off
-    global onpage_verify
-    if args.no_onpage:
-        def noop_onpage(_url: str) -> Tuple[int, float]:
-            return 0, 0.0
-        onpage_verify = noop_onpage  # type: ignore
+        # Show dataframe if pandas available
+        if pd is not None:
+            df = pd.DataFrame([{
+                'label': c.label, 'score': round(c.total_score,2), 'domain': c.domain, 'url': c.url,
+                'title': c.title, 'snippet': c.snippet, 'onpage_hits': c.onpage_hits, 'query': c.query
+            } for c in final])
+            st.dataframe(df.head(200))
 
-    results = process_queries(
-        queries=queries,
-        limit_per_query=args.limit,
-        serpapi_key=args.serpapi_key,
-        use_duck=args.use_duck or not args.serpapi_key,
-        gl=args.gl,
-        hl=args.hl,
-        tld=args.tld,
-        qdr=args.qdr,
-        polite_delay=args.polite_delay
-    )
+            csv_bytes = df.to_csv(index=False).encode('utf-8')
+            st.download_button('Download CSV', data=csv_bytes, file_name='guestpost_results.csv', mime='text/csv')
+            st.download_button('Download JSON', data=df.to_json(orient='records', force_ascii=False).encode('utf-8'), file_name='guestpost_results.json', mime='application/json')
+        else:
+            # simple print
+            for c in final[:200]:
+                st.write(f"[{c.label}] {c.total_score:.2f} — {c.domain}")
+                st.write(c.title)
+                st.write(c.url)
+                st.write(c.snippet)
+                st.write('---')
 
-    print(f"[i] Collected {len(results)} candidates.")
-    top = results[: max(200, len(results))]  # keep all, but slice is harmless
+        st.balloons()
 
-    if args.out:
-        export_csv(top, args.out)
-        print(f"[✓] CSV written to {args.out}")
-    if args.json:
-        export_json(top, args.json)
-        print(f"[✓] JSON written to {args.json}")
-
-    if not args.out and not args.json:
-        # print a small table to stdout
-        print("\nTop results:")
-        for c in top[:25]:
-            print(f"- [{c.label:8}] {c.total_score:4.1f}  {c.domain:30}  {c.title[:80]}")
-            print(f"  {c.url}")
-            if c.snippet:
-                print(f"  {c.snippet[:120]}")
-            print()
-
-if __name__ == "__main__":
-    main()
+# Footer
+st.markdown('---')
+st.caption('GuestPost Finder — Streamlit single-file app. Save to GitHub and deploy to Streamlit Cloud.')
