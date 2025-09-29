@@ -10,7 +10,7 @@ from datetime import datetime
 
 # Page configuration
 st.set_page_config(
-    page_title="🚀 WORKING Guest Post Finder",
+    page_title="🚀 REAL SEARCH Guest Post Finder",
     page_icon="🔍",
     layout="wide"
 )
@@ -26,18 +26,18 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
     }
-    .success-badge {
-        background: #4CAF50;
-        color: white;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: bold;
+    .site-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        border-left: 5px solid #4CAF50;
     }
 </style>
 """, unsafe_allow_html=True)
 
-class WorkingGuestPostFinder:
+class RealSearchFinder:
     def __init__(self):
         self.user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -50,314 +50,392 @@ class WorkingGuestPostFinder:
             'User-Agent': random.choice(self.user_agents),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
         }
     
     def generate_search_queries(self, keyword):
-        """Generate realistic search queries"""
+        """Generate multiple search queries"""
+        base_keyword = keyword.lower().strip()
         queries = [
-            f'"{keyword}" "write for us"',
-            f'"{keyword}" "guest post"',
-            f'"{keyword}" "guest article"',
-            f'"{keyword}" "submit article"',
-            f'"{keyword}" "become a contributor"',
-            f'"{keyword}" "accepting guest posts"',
-            f'"{keyword}" "guest blogging"',
-            f'intitle:"write for us" "{keyword}"',
-            f'inurl:"write-for-us" "{keyword}"',
-            f'inurl:"guest-post" "{keyword}"',
-            f'"{keyword}" "blogging opportunities"',
-            f'"{keyword}" "content submission"',
-            f'"{keyword}" "looking for writers"',
-            f'"{keyword}" "contributor guidelines"',
-            f'"{keyword}" "submit your article"',
+            f'"{base_keyword}" "write for us"',
+            f'"{base_keyword}" "guest post"',
+            f'"{base_keyword}" "guest article"',
+            f'"{base_keyword}" "submit article"',
+            f'"{base_keyword}" "become a contributor"',
+            f'"{base_keyword}" "accepting guest posts"',
+            f'"{base_keyword}" "guest blogging"',
+            f'"{base_keyword}" "contribute to our blog"',
+            f'"{base_keyword}" "submit guest post"',
+            f'"{base_keyword}" "looking for writers"',
+            f'"{base_keyword}" "blog contributor"',
+            f'"{base_keyword}" "author guidelines"',
+            f'intitle:"write for us" "{base_keyword}"',
+            f'intitle:"guest post" "{base_keyword}"',
+            f'inurl:"write-for-us" "{base_keyword}"',
+            f'inurl:"guest-post" "{base_keyword}"',
+            f'inurl:"contribute" "{base_keyword}"',
+            f'"{base_keyword}" site:.com "write for us"',
+            f'"{base_keyword}" site:.org "guest post"',
         ]
         return queries
     
-    def search_with_duckduckgo(self, query):
-        """Use DuckDuckGo which is more reliable than Google"""
+    def search_duckduckgo(self, query):
+        """Search using DuckDuckGo - More reliable"""
         try:
             url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
-            response = requests.get(url, headers=self.get_headers(), timeout=10)
+            response = requests.get(url, headers=self.get_headers(), timeout=15)
             
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, 'html.parser')
                 results = []
                 
-                # DuckDuckGo result parsing
-                for result in soup.find_all('a', class_='result__url'):
-                    link = result.get('href')
-                    if link and link.startswith('http'):
-                        results.append(link)
+                # Find all result links
+                for link in soup.find_all('a', class_='result__url'):
+                    href = link.get('href')
+                    if href and href.startswith('http'):
+                        results.append(href)
                 
-                return results[:10]  # Return top 10 results
+                # Alternative parsing method
+                if not results:
+                    for link in soup.find_all('a', href=True):
+                        href = link['href']
+                        if href.startswith('http') and 'duckduckgo.com' not in href:
+                            results.append(href)
+                
+                return list(set(results))[:10]  # Remove duplicates, return top 10
             return []
-        except:
+        except Exception as e:
+            st.error(f"Search error: {str(e)}")
             return []
     
-    def get_dummy_results(self, keyword):
-        """Generate realistic dummy results when search fails"""
-        domains = [
-            f"{keyword}-blog.com", f"{keyword}-insights.com", f"{keyword}-hub.com",
-            f"{keyword}-experts.com", f"{keyword}-today.com", f"{keyword}-world.com",
-            f"{keyword}-guide.com", f"{keyword}-spot.com", f"{keyword}-central.com"
-        ]
-        
-        results = []
-        for domain in domains:
-            results.append({
-                'url': f"https://www.{domain}",
-                'title': f"{keyword.title()} Blog - Write For Us",
-                'description': f"Accepting guest posts about {keyword} topics",
-                'emails': [f"editor@{domain}", f"contact@{domain}"],
-                'da_score': random.randint(25, 85),
-                'contact_page': True,
-                'guest_post_page': True
-            })
-        return results
-    
-    def analyze_site(self, url):
-        """Simple site analysis"""
+    def search_bing(self, query):
+        """Search using Bing as backup"""
         try:
-            response = requests.get(url, headers=self.get_headers(), timeout=10)
+            url = f"https://www.bing.com/search?q={quote(query)}"
+            response = requests.get(url, headers=self.get_headers(), timeout=15)
+            
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, 'html.parser')
+                results = []
                 
-                # Basic info
-                title = soup.title.string if soup.title else "No Title"
-                text = soup.get_text().lower()
+                # Bing result parsing
+                for li in soup.find_all('li', class_='b_algo'):
+                    link = li.find('a')
+                    if link and link.get('href'):
+                        results.append(link['href'])
                 
-                # Check for guest post indicators
-                guest_indicators = ['write for us', 'guest post', 'submit article', 'become a contributor']
-                guest_signals = [indicator for indicator in guest_indicators if indicator in text]
+                return results[:10]
+            return []
+        except:
+            return []
+    
+    def search_google_alternative(self, query):
+        """Alternative Google search method"""
+        try:
+            url = f"https://www.google.com/search?q={quote(query)}"
+            response = requests.get(url, headers=self.get_headers(), timeout=15)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                results = []
                 
-                # Check for contact info
-                contact_indicators = ['contact', 'email', 'write to us']
-                contact_signals = [indicator for indicator in contact_indicators if indicator in text]
+                # Multiple parsing strategies for Google
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    if '/url?q=' in href:
+                        try:
+                            actual_url = href.split('/url?q=')[1].split('&')[0]
+                            if actual_url.startswith('http'):
+                                results.append(actual_url)
+                        except:
+                            continue
                 
-                # Extract emails
-                emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', response.text)
-                emails = list(set(emails))[:3]  # Remove duplicates, max 3
-                
-                # Calculate simple score
-                score = len(guest_signals) * 20 + len(contact_signals) * 10 + len(emails) * 15
-                score = min(score, 100)
-                
+                return list(set(results))[:10]
+            return []
+        except:
+            return []
+    
+    def analyze_website(self, url):
+        """Analyze a single website for guest posting potential"""
+        try:
+            # First, check if website is accessible
+            response = requests.get(url, headers=self.get_headers(), timeout=10)
+            if response.status_code != 200:
+                return None
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Get basic info
+            title = soup.title.string if soup.title else "No Title"
+            page_text = soup.get_text().lower()
+            
+            # Check for guest posting indicators
+            guest_indicators = [
+                'write for us', 'guest post', 'submit article', 'become a contributor',
+                'guest blogging', 'contribute', 'submit guest post', 'author guidelines',
+                'submission guidelines', 'looking for writers', 'blog contributor'
+            ]
+            
+            found_indicators = []
+            for indicator in guest_indicators:
+                if indicator in page_text:
+                    found_indicators.append(indicator)
+            
+            # Check for contact information
+            contact_indicators = ['contact', 'email', 'write to us', 'get in touch']
+            contact_found = any(indicator in page_text for indicator in contact_indicators)
+            
+            # Extract emails
+            email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+            emails = re.findall(email_pattern, response.text)
+            emails = list(set(emails))[:3]  # Remove duplicates, max 3
+            
+            # Calculate quality score
+            score = 0
+            score += len(found_indicators) * 15
+            score += len(emails) * 20
+            score += 25 if contact_found else 0
+            score += 20 if len(page_text) > 1000 else 0  # Content richness
+            
+            # Only return if it has guest posting potential
+            if score >= 20:  # Minimum threshold
                 return {
                     'url': url,
-                    'title': title[:100],
-                    'guest_signals': guest_signals,
-                    'contact_signals': contact_signals,
+                    'title': title[:150],
+                    'guest_indicators': found_indicators,
                     'emails': emails,
-                    'score': score,
-                    'status': 'Active' if response.status_code == 200 else 'Inactive'
+                    'contact_found': contact_found,
+                    'quality_score': min(score, 100),
+                    'content_length': len(page_text),
+                    'status': 'Active'
                 }
-        except:
-            pass
+            
+            return None
+            
+        except Exception as e:
+            return None
+    
+    def perform_real_search(self, keyword, max_results=30):
+        """Perform actual web search"""
+        st.info("🚀 Starting REAL web search... This may take 1-2 minutes.")
         
-        return None
+        # Generate search queries
+        queries = self.generate_search_queries(keyword)
+        
+        # Collect URLs from multiple search engines
+        all_urls = []
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Search phase
+        status_text.text("🔍 Searching across multiple engines...")
+        for i, query in enumerate(queries):
+            progress_bar.progress((i + 1) / len(queries) * 0.3)
+            
+            # Try DuckDuckGo first
+            ddg_results = self.search_duckduckgo(query)
+            all_urls.extend(ddg_results)
+            
+            # Try Bing as backup
+            if len(ddg_results) < 5:
+                bing_results = self.search_bing(query)
+                all_urls.extend(bing_results)
+            
+            # Small delay to be respectful
+            time.sleep(2)
+        
+        # Remove duplicates
+        unique_urls = list(set(all_urls))
+        status_text.text(f"📊 Found {len(unique_urls)} unique URLs. Analyzing websites...")
+        
+        # Analysis phase
+        results = []
+        for i, url in enumerate(unique_urls[:max_results]):
+            progress = 0.3 + (i + 1) / min(max_results, len(unique_urls)) * 0.7
+            progress_bar.progress(progress)
+            
+            analysis = self.analyze_website(url)
+            if analysis:
+                results.append(analysis)
+            
+            # Be respectful to servers
+            time.sleep(1)
+        
+        progress_bar.progress(1.0)
+        return results
 
 def main():
     st.markdown("""
     <div class="main-header">
-        <h1>🚀 WORKING Guest Post Finder</h1>
-        <p>Simple • Effective • 100% Working</p>
+        <h1>🚀 REAL SEARCH Guest Post Finder</h1>
+        <p>100% Real Web Search • No Demo Data • Actual Results</p>
     </div>
     """, unsafe_allow_html=True)
     
     # Initialize session state
     if 'search_complete' not in st.session_state:
         st.session_state.search_complete = False
-    if 'results' not in st.session_state:
-        st.session_state.results = []
+    if 'real_results' not in st.session_state:
+        st.session_state.real_results = []
     
     # Sidebar
     with st.sidebar:
         st.header("⚙️ Search Settings")
         
         keyword = st.text_input(
-            "🎯 Enter Your Niche", 
+            "🎯 Enter Your Niche/Keyword", 
             value="digital marketing",
-            placeholder="e.g., health, technology, finance"
+            placeholder="e.g., technology, health, business, finance"
         )
         
-        search_type = st.radio(
-            "🔍 Search Method",
-            ["Real Search", "Demo Mode"],
-            help="Demo Mode shows sample results instantly"
-        )
+        st.info("💡 **Tips for better results:**")
+        st.write("- Use specific niches")
+        st.write("- Be patient (search takes 1-2 minutes)")
+        st.write("- Try different keywords if needed")
         
-        min_score = st.slider("🎯 Minimum Quality Score", 0, 100, 30)
-        
-        if st.button("🚀 START SEARCH", type="primary", use_container_width=True):
+        if st.button("🚀 START REAL SEARCH", type="primary", use_container_width=True):
             if keyword.strip():
-                perform_search(keyword, search_type, min_score)
+                with st.spinner('🔄 Starting real web search...'):
+                    finder = RealSearchFinder()
+                    results = finder.perform_real_search(keyword)
+                    
+                    st.session_state.real_results = results
+                    st.session_state.search_complete = True
+                    st.session_state.current_keyword = keyword
+                    st.rerun()
             else:
-                st.error("Please enter a niche/keyword!")
+                st.error("❌ Please enter a keyword!")
     
     # Main content
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Search Method", "DuckDuckGo" if search_type == "Real Search" else "Demo")
+        st.metric("Search Engines", "DuckDuckGo + Bing")
     with col2:
-        st.metric("Quality Check", "10+ Factors")
+        st.metric("Search Method", "Real-time")
     with col3:
-        st.metric("Results", "Guaranteed")
+        st.metric("Data Source", "Live Web")
     
-    st.info("💡 **Tip:** Use specific niches like 'digital marketing', 'health technology', or 'personal finance' for best results.")
+    # Display instructions
+    if not st.session_state.search_complete:
+        st.info("""
+        **📋 How this works:**
+        1. Enter your niche/keyword
+        2. Click "START REAL SEARCH" 
+        3. Wait 1-2 minutes for real web search
+        4. Get actual guest posting sites from live web
+        
+        **🔍 Searching:** DuckDuckGo + Bing
+        **⏰ Time:** 1-2 minutes
+        **✅ Results:** 100% Real websites
+        """)
     
     # Display results
     if st.session_state.search_complete:
-        display_results(keyword, min_score)
+        display_real_results()
 
-def perform_search(keyword, search_type, min_score):
-    """Perform the search operation"""
-    finder = WorkingGuestPostFinder()
-    
-    with st.spinner('🔍 Searching for guest posting opportunities...'):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        if search_type == "Real Search":
-            # Real search with DuckDuckGo
-            status_text.text("🔄 Generating search queries...")
-            queries = finder.generate_search_queries(keyword)
-            
-            all_urls = []
-            for i, query in enumerate(queries):
-                progress_bar.progress((i + 1) / len(queries) * 0.5)
-                urls = finder.search_with_duckduckgo(query)
-                all_urls.extend(urls)
-                time.sleep(1)  # Be respectful
-            
-            # Remove duplicates
-            unique_urls = list(set(all_urls))
-            status_text.text(f"📊 Found {len(unique_urls)} URLs. Analyzing...")
-            
-            # Analyze sites
-            results = []
-            for i, url in enumerate(unique_urls[:20]):  # Analyze top 20
-                progress_bar.progress(0.5 + (i + 1) / min(20, len(unique_urls)) * 0.5)
-                analysis = finder.analyze_site(url)
-                if analysis and analysis['score'] >= min_score:
-                    results.append(analysis)
-                time.sleep(0.5)
-            
-        else:
-            # Demo mode - instant results
-            status_text.text("🎯 Generating demo results...")
-            time.sleep(2)
-            dummy_data = finder.get_dummy_results(keyword)
-            results = []
-            
-            for i, site in enumerate(dummy_data):
-                progress_bar.progress((i + 1) / len(dummy_data))
-                results.append({
-                    'url': site['url'],
-                    'title': site['title'],
-                    'guest_signals': ['write for us', 'guest post'],
-                    'contact_signals': ['contact', 'email'],
-                    'emails': site['emails'],
-                    'score': site['da_score'],
-                    'status': 'Active'
-                })
-        
-        # Update session state
-        st.session_state.results = results
-        st.session_state.search_complete = True
-        st.session_state.current_keyword = keyword
-        
-        progress_bar.progress(100)
-        status_text.text("✅ Search complete!")
-
-def display_results(keyword, min_score):
-    """Display search results"""
-    results = st.session_state.results
+def display_real_results():
+    """Display real search results"""
+    results = st.session_state.real_results
+    keyword = st.session_state.current_keyword
     
     if results:
-        # Create DataFrame for better display
-        df_data = []
-        for result in results:
-            df_data.append({
-                'URL': result['url'],
-                'Title': result['title'],
-                'Quality Score': result['score'],
-                'Emails': ', '.join(result['emails']) if result['emails'] else 'Not found',
-                'Guest Signals': ', '.join(result['guest_signals'][:3]),
-                'Status': result['status']
-            })
-        
-        df = pd.DataFrame(df_data)
-        df = df.sort_values('Quality Score', ascending=False)
-        
-        st.success(f"🎉 Found {len(results)} quality sites for '{keyword}'!")
+        st.success(f"🎉 Found {len(results)} REAL guest posting sites for '{keyword}'!")
         
         # Metrics
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Total Sites", len(results))
         with col2:
-            high_quality = len([r for r in results if r['score'] >= 70])
+            high_quality = len([r for r in results if r['quality_score'] >= 60])
             st.metric("High Quality", high_quality)
         with col3:
             with_emails = len([r for r in results if r['emails']])
             st.metric("With Emails", with_emails)
         with col4:
-            avg_score = sum(r['score'] for r in results) / len(results)
-            st.metric("Avg Score", f"{avg_score:.1f}")
+            avg_score = sum(r['quality_score'] for r in results) / len(results)
+            st.metric("Avg Quality", f"{avg_score:.1f}")
         
-        # Display results in expandable cards
-        st.subheader("📋 Guest Posting Opportunities")
+        # Display results
+        st.subheader("📋 Real Guest Posting Opportunities")
         
-        for i, (idx, row) in enumerate(df.iterrows()):
-            with st.expander(f"#{i+1} - Score: {row['Quality Score']} - {row['Title'][:50]}..."):
+        for i, site in enumerate(results):
+            with st.expander(f"#{i+1} - Score: {site['quality_score']} - {site['title'][:60]}...", expanded=i<3):
                 col1, col2 = st.columns([2, 1])
                 
                 with col1:
-                    st.write(f"**🌐 URL:** [{row['URL']}]({row['URL']})")
-                    st.write(f"**📝 Title:** {row['Title']}")
+                    st.write(f"**🌐 Website:** [{site['url']}]({site['url']})")
+                    st.write(f"**📝 Title:** {site['title']}")
                     
-                    if row['Emails'] and row['Emails'] != 'Not found':
-                        st.write(f"**📧 Contact Emails:** {row['Emails']}")
+                    if site['emails']:
+                        st.write(f"**📧 Contact Emails:** {', '.join(site['emails'])}")
+                    else:
+                        st.write("**📧 Contact Emails:** Not found (check website contact page)")
                     
-                    st.write(f"**🎯 Guest Post Signals:** {row['Guest Signals']}")
+                    if site['guest_indicators']:
+                        st.write(f"**🎯 Guest Post Signals:** {', '.join(site['guest_indicators'][:5])}")
+                    
+                    st.write(f"**📊 Content Length:** {site['content_length']} characters")
                 
                 with col2:
-                    score_color = "🟢" if row['Quality Score'] >= 70 else "🟡" if row['Quality Score'] >= 50 else "🟠"
-                    st.write(f"**{score_color} Quality Score:** {row['Quality Score']}/100")
-                    st.write(f"**📊 Status:** {row['Status']}")
+                    score_color = "🟢" if site['quality_score'] >= 70 else "🟡" if site['quality_score'] >= 50 else "🟠"
+                    st.write(f"**{score_color} Quality Score:** {site['quality_score']}/100")
+                    st.write(f"**✅ Contact Page:** {'Yes' if site['contact_found'] else 'Not Found'}")
+                    st.write(f"**📈 Status:** {site['status']}")
         
-        # Download options
-        st.subheader("📥 Export Results")
+        # Export options
+        st.subheader("📥 Export Real Results")
+        
+        # Create DataFrame for export
+        df_data = []
+        for site in results:
+            df_data.append({
+                'URL': site['url'],
+                'Title': site['title'],
+                'Quality_Score': site['quality_score'],
+                'Emails': ', '.join(site['emails']) if site['emails'] else 'Not found',
+                'Guest_Indicators': ', '.join(site['guest_indicators']),
+                'Contact_Page': 'Yes' if site['contact_found'] else 'No',
+                'Content_Length': site['content_length']
+            })
+        
+        df = pd.DataFrame(df_data)
+        
         col1, col2 = st.columns(2)
-        
         with col1:
             csv = df.to_csv(index=False)
             st.download_button(
                 label="💾 Download CSV",
                 data=csv,
-                file_name=f"guest_posts_{keyword}_{datetime.now().strftime('%Y%m%d')}.csv",
+                file_name=f"real_guest_posts_{keyword}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                 mime="text/csv",
                 type="primary"
             )
         
         with col2:
-            # Simple JSON export
             json_data = df.to_json(orient='records', indent=2)
             st.download_button(
                 label="📄 Download JSON",
                 data=json_data,
-                file_name=f"guest_posts_{keyword}_{datetime.now().strftime('%Y%m%d')}.json",
+                file_name=f"real_guest_posts_{keyword}_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
                 mime="application/json"
             )
     
     else:
-        st.warning(f"❌ No sites found with minimum score of {min_score} for '{keyword}'")
+        st.error(f"❌ No guest posting sites found for '{keyword}' in real search")
         st.info("""
-        **💡 Try these solutions:**
-        - Lower the Minimum Quality Score to 20-25
-        - Use **Demo Mode** for instant sample results
-        - Try different keywords
-        - Check your internet connection
+        **🔧 Try these solutions:**
+        1. **Use more specific keywords** - Instead of "game", try "game development", "gaming technology", "video game reviews"
+        2. **Try different niches** - "digital marketing", "technology", "health", "business"
+        3. **Check your internet connection**
+        4. **Wait a few minutes and try again** - Search engines might be temporarily busy
+        
+        **💡 Example keywords that work well:**
+        - "digital marketing"
+        - "web development" 
+        - "health technology"
+        - "personal finance"
+        - "business strategy"
         """)
 
 if __name__ == "__main__":
