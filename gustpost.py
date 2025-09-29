@@ -134,7 +134,7 @@ class UltraUltimateGuestPostingFinder:
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': random.choice(self.config.STEALTH_USER_AGENTS),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q.8'
         })
         self.conn = sqlite3.connect(':memory:')
         self.cursor = self.conn.cursor()
@@ -204,8 +204,21 @@ class UltraUltimateGuestPostingFinder:
                 except Exception:
                     continue
 
-        # Return unique URLs up to the maximum site limit
-        return list(set(all_urls))[:max_sites]
+        # --- NEW: Domain-level Deduplication ---
+        unique_urls = {} # Key: domain, Value: URL
+        for url in all_urls:
+            # Check for a valid URL/domain
+            try:
+                domain = urlparse(url).netloc
+                # Only keep the first URL found for any given domain
+                if domain and domain not in unique_urls:
+                    unique_urls[domain] = url
+            except Exception:
+                continue
+        
+        # Return unique URLs (by domain) up to the maximum site limit
+        return list(unique_urls.values())[:max_sites]
+        # --- END NEW DEDUPLICATION ---
 
     def generate_sample_urls(self, niche: str, count: int) -> List[str]:
         """Fallback: Generate sample URLs for demo if search fails"""
