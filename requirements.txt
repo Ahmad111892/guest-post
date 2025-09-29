@@ -4,5 +4,4 @@ pandas
 beautifulsoup4 
 plotly 
 textstat 
-python-whois 
-dnspython
+python-whois
