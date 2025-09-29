@@ -8,13 +8,12 @@ from bs4 import BeautifulSoup
 import re
 from datetime import datetime
 import json
-from urllib.parse import urlparse, quote_plus
+from urllib.parse import urlparse
 import plotly.express as px
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 import random
 import whois
-import math
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -40,83 +39,77 @@ st.markdown("""
         padding: 1.5rem; border-radius: 10px; color: white; margin: 1rem 0;
     }
     .warning-card {
-        background: linear-gradient(135deg, #FF6F61 0%, #DE4C8A 100%); /* Changed color for final warning */
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
         padding: 1.5rem; border-radius: 10px; color: white; margin: 1rem 0;
-        border: 3px solid #FFD700; /* Gold border for high alert */
     }
     .stButton>button { width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- MOCK DATA GENERATION ---
-def generate_mock_results(niche, count):
-    """Generates realistic mock data to showcase functionality when live scraping is blocked."""
-    mock_results = []
-    base_domains = {
-        'health': ['wellnessdaily.com', 'healthandfitnessmag.net', 'nutritionhq.org', 'lifespaninsights.com'],
-        'technology': ['techinnovations.co', 'softwaretrends.blog', 'futureofcode.com', 'digitaldigest.net'],
-        'finance': ['moneyflowjournal.com', 'investorsview.net', 'wealthstrategy.blog', 'themarketreport.org']
-    }
-    domain_list = base_domains.get(niche.lower(), base_domains['technology'])
-
-    for i in range(count):
-        domain = random.choice(domain_list)
-        mock_results.append({
-            'url': f"https://{domain}/write-for-us-{i}",
-            'domain': domain,
-            'title': f"{domain.split('.')[0].title()} - Guest Post Program {i+1}",
-            'indicators_found': [{'text': 'write for us', 'confidence': 'platinum'}],
-            'emails': [f"editor@{domain}"] if random.random() > 0.3 else [],
-            'https_enabled': True,
-            'confidence_score': random.randint(30, 95),
-            'domain_authority': random.randint(30, 85),
-            'trust_score': random.randint(50, 90),
-            'word_count': random.randint(800, 3000),
-        })
-    return mock_results
 
 # --- CORE APPLICATION CLASS ---
 class UltimateGuestPostingFinder:
     def __init__(self):
-        self.user_agents = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36']
         self.ultimate_patterns = {
             'basic_footprints': ['"{niche}" "write for us"', '"{niche}" "guest post"'],
+            'advanced_footprints': ['"{niche}" inurl:write-for-us', '"{niche}" inurl:contribute'],
+            'title_patterns': ['"{niche}" intitle:"write for us"', '"{niche}" intitle:"guest post"'],
+            'industry_specific': ['"{niche}" "accepting guest posts"', '"{niche}" "looking for contributors"'],
         }
         self.ultimate_indicators = {
-            'platinum': ['write for us', 'submission guidelines'],
+            'platinum': ['write for us', 'guest posting guidelines', 'submission guidelines'],
+            'gold': ['guest post', 'submit guest post', 'guest author'],
+            'silver': ['contributor', 'submit content', 'collaborate with us'],
         }
-
-    def get_random_headers(self):
-        return {'User-Agent': random.choice(self.user_agents)}
+        # Load API keys from Streamlit Secrets
+        try:
+            self.api_key = st.secrets["GOOGLE_API_KEY"]
+            self.search_engine_id = st.secrets["SEARCH_ENGINE_ID"]
+        except (FileNotFoundError, KeyError):
+            self.api_key = None
+            self.search_engine_id = None
 
     def generate_ultimate_queries(self, niche, competitors=None, location=None):
         all_queries = set()
         for patterns in self.ultimate_patterns.values():
-            for pattern in patterns: all_queries.add(pattern.format(niche=niche))
+            for pattern in patterns:
+                all_queries.add(pattern.format(niche=niche))
+        if location: all_queries.add(f'"{niche}" "{location}" "write for us"')
+        if competitors:
+            for competitor in competitors:
+                if competitor: all_queries.add(f'"{competitor}" "guest post by" -site:{competitor}')
         return list(all_queries)
 
-    def search_ddg_api(self, query):
-        headers = self.get_random_headers()
-        params = {'q': query, 'format': 'json', 'no_html': '1', 'skip_disambig': '1'}
-        try:
-            response = requests.get("https://api.duckduckgo.com/", headers=headers, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            links = [result.get('FirstURL', '') for result in data.get('Results', []) if result.get('FirstURL')]
-            return [link for link in links if self.is_valid_url(link)]
-        except requests.RequestException:
+    def search_google_api(self, query):
+        """
+        PRIMARY AND ONLY SEARCH METHOD.
+        Uses the reliable Google Programmable Search Engine API.
+        """
+        if not self.api_key or not self.search_engine_id:
+            st.error("API Key or Search Engine ID is not configured in Streamlit Secrets.")
             return []
 
-    def search_startpage(self, query):
-        headers = self.get_random_headers()
-        url = f"https://www.startpage.com/sp/search?q={quote_plus(query)}"
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            'key': self.api_key,
+            'cx': self.search_engine_id,
+            'q': query,
+            'num': 10  # API allows max 10 results per query
+        }
         try:
-            response = requests.get(url, headers=headers, timeout=15)
+            response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
-            soup = BeautifulSoup(response.content, 'html.parser')
-            links = [a['href'] for a in soup.select('a.result-link')]
+            data = response.json()
+            
+            # Check for API errors or exceeding quota
+            if 'error' in data:
+                st.error(f"API Error: {data['error']['message']}")
+                return []
+                
+            links = [item.get('link', '') for item in data.get('items', [])]
             return [link for link in links if self.is_valid_url(link)]
-        except requests.RequestException:
+        except requests.RequestException as e:
+            st.warning(f"API call failed. Error: {e}")
             return []
 
     def is_valid_url(self, url):
@@ -128,95 +121,133 @@ class UltimateGuestPostingFinder:
         except:
             return False
 
+    def get_domain_age_score(self, domain):
+        try:
+            domain_info = whois.whois(domain)
+            creation_date = domain_info.creation_date
+            if isinstance(creation_date, list): creation_date = creation_date[0]
+            if creation_date:
+                age = (datetime.now() - creation_date).days / 365.25
+                if age > 10: return 15
+                elif age > 5: return 10
+                elif age > 2: return 5
+        except Exception: pass
+        return 2
+
     def analyze_website(self, url):
         try:
-            # We are not doing deep analysis here to prevent further blocking
-            # The goal is to get the URL for the showcase
-            return {'url': url, 'domain': urlparse(url).netloc, 'confidence_score': 100, 'domain_authority': 100, 'trust_score': 100, 'emails': ['test@example.com']}
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            page_text = soup.get_text().lower()
+            
+            analysis = {
+                'url': url, 'domain': urlparse(url).netloc,
+                'title': soup.title.string.strip() if soup.title and soup.title.string else "No Title",
+                'indicators_found': self.find_guest_posting_indicators(page_text),
+                'emails': list(set(re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', response.text))),
+                'https_enabled': url.startswith('https://'),
+            }
+            
+            analysis = self.calculate_all_scores(analysis)
+            return analysis
         except Exception:
             return None
 
+    def find_guest_posting_indicators(self, page_text):
+        found = []
+        for confidence, indicators in self.ultimate_indicators.items():
+            for indicator in indicators:
+                if indicator in page_text:
+                    found.append({'text': indicator, 'confidence': confidence})
+        return found
+
+    def calculate_all_scores(self, analysis):
+        score = sum({'platinum': 25, 'gold': 15, 'silver': 10}.get(ind['confidence'], 0) for ind in analysis['indicators_found'])
+        analysis['confidence_score'] = min(score, 100)
+        
+        da_score = self.get_domain_age_score(analysis['domain']) + (15 if analysis['https_enabled'] else 0)
+        if any(tld in analysis['domain'] for tld in ['.edu', '.gov']): da_score += 25
+        analysis['domain_authority'] = min(int(da_score * 2.0), 100)
+
+        analysis['trust_score'] = min((30 if analysis['emails'] else 0) + (20 if analysis['https_enabled'] else 0) + (15 if analysis['domain_authority'] > 50 else 5), 100)
+        return analysis
+
     def parallel_search_and_analyze(self, niche, competitors, location, max_sites):
-        st.info("🚀 Initiating ULTIMATE search with reliable engines...")
+        st.info("🚀 Initiating ULTIMATE search using the Google API...")
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         all_queries = self.generate_ultimate_queries(niche, competitors, location)
         all_urls = set()
         
-        with ThreadPoolExecutor(max_workers=15) as executor:
-            futures = {executor.submit(self.search_ddg_api, query) for query in all_queries}
-            futures.update({executor.submit(self.search_startpage, query) for query in all_queries})
-            
+        # The free API is limited to 100 queries/day, so we use them efficiently
+        queries_to_run = all_queries[:15] # Limit to 15 API calls per run to be safe
+        
+        with ThreadPoolExecutor(max_workers=5) as executor: # Lower workers for API politeness
+            futures = {executor.submit(self.search_google_api, query) for query in queries_to_run}
             for i, future in enumerate(as_completed(futures)):
                 all_urls.update(future.result())
                 progress_bar.progress(int(((i + 1) / len(futures)) * 50))
-                status_text.text(f"🔍 Searching... Found {len(all_urls)} potential sites.")
+                status_text.text(f"🔍 Searching... Found {len(all_urls)} potential sites from {i+1}/{len(futures)} queries.")
         
         st.session_state.search_stats['urls_found'] = len(all_urls)
-        unique_urls = list(all_urls)[:max_sites * 3]
+        unique_urls = list(all_urls)
         
-        if len(unique_urls) < 5:
-            # --- FINAL FALLBACK: MOCK DATA SHOWCASE ---
-            status_text.warning("⚠️ Live search failed to find enough results. Switching to Mock Data Showcase.")
-            st.session_state.search_stats['live_search_failed'] = True
-            return generate_mock_results(niche, max_sites)
-        
-        # --- ORIGINAL ANALYSIS FLOW (Only if URLs found) ---
+        if not unique_urls:
+            status_text.error("Search phase completed but found 0 URLs. Check if your API quota is exceeded.")
+            return []
+
         status_text.text(f"🔬 Found {len(unique_urls)} unique URLs. Starting deep analysis...")
         results = []
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             analysis_futures = {executor.submit(self.analyze_website, url) for url in unique_urls}
             for i, future in enumerate(as_completed(analysis_futures)):
                 result = future.result()
                 if result: results.append(result)
                 progress_bar.progress(50 + int(((i + 1) / len(analysis_futures)) * 50))
-                status_text.text(f"🔬 Analyzing... {i+1}/{len(analysis_futures)} sites processed. Found {len(results)} opportunities.")
+                status_text.text(f"🔬 Analyzing... {i+1}/{len(analysis_futures)} sites processed.")
         
         st.session_state.search_stats['sites_analyzed'] = len(results)
-        final_results = results[:max_sites]
+        filtered_results = [r for r in results if r.get('confidence_score', 0) > 0]
+        filtered_results.sort(key=lambda x: (x.get('confidence_score', 0) * 0.6 + x.get('domain_authority', 0) * 0.4), reverse=True)
+        
+        final_results = filtered_results[:max_sites]
         status_text.success(f"✅ ULTIMATE analysis complete! Found {len(final_results)} guest posting opportunities.")
         return final_results
 
 # --- UI AND DASHBOARD FUNCTIONS ---
-def create_ultimate_dashboard(results):
-    st.markdown("---")
-    st.markdown("## 📊 ULTIMATE Analytics Dashboard")
-    if not results:
-        st.warning("🚫 No results to display on dashboard.")
-        return
-    
-    col1, col2, col3, col4 = st.columns(4)
-    df = pd.DataFrame(results)
-    avg_da = int(df['domain_authority'].mean())
-    sites_with_email = len([r for r in results if r.get('emails')])
-    avg_confidence = int(df['confidence_score'].mean())
-    
-    col1.metric("🎯 Total Sites", len(results))
-    col2.metric("📈 Avg. DA", avg_da)
-    col3.metric("📧 With Email", sites_with_email)
-    col4.metric("💡 Avg. Confidence", f"{avg_confidence}/100")
+def show_api_setup_instructions():
+    st.error("API Key or Search Engine ID not found!")
+    st.markdown("""
+    ### 🔑 One-Time Setup Required (5 Minutes)
+    To use this tool reliably, you need a free Google API Key and a Programmable Search Engine ID.
 
-    fig = px.scatter(df, x='domain_authority', y='confidence_score', color='trust_score', hover_name='domain', title="Confidence vs. Domain Authority")
-    st.plotly_chart(fig, use_container_width=True)
+    **Step 1: Get Your API Key**
+    1.  Go to the [Google Cloud Console Credentials Page](https://console.cloud.google.com/apis/credentials).
+    2.  Create a new project (or select an existing one).
+    3.  Click **"+ CREATE CREDENTIALS"** and select **"API key"**.
+    4.  Copy your new API key. **Do not add any restrictions.**
 
-def create_export_options(results):
-    if not results: return
-    st.markdown("---")
-    st.markdown("### 📥 ULTIMATE Export Hub")
-    df_export = pd.DataFrame(results)
-    df_export['emails'] = df_export['emails'].apply(lambda x: ', '.join(x) if isinstance(x, list) else '')
-    df_export['indicators_found'] = df_export['indicators_found'].apply(lambda x: ', '.join([i['text'] for i in x]) if isinstance(x, list) else '')
+    **Step 2: Get Your Programmable Search Engine ID**
+    1.  Go to the [Programmable Search Engine Control Panel](https://programmablesearchengine.google.com/controlpanel/all).
+    2.  Click **"Add"** to create a new search engine.
+    3.  Under "What to search?", select **"Search the entire web"**.
+    4.  Give it a name (e.g., "GuestPostFinder") and click **"Create"**.
+    5.  Copy your **"Search engine ID"** from the main page.
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.download_button(label="📊 Download as CSV", data=df_export.to_csv(index=False).encode('utf-8'), file_name=f"guest_post_sites_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
-    with col2:
-        st.download_button(label="📋 Download as JSON", data=json.dumps(results, indent=2, default=str), file_name=f"guest_post_analysis_{datetime.now().strftime('%Y%m%d')}.json", mime="application/json")
-    with col3:
-        excel_buffer = BytesIO()
-        df_export.to_excel(excel_buffer, index=False, sheet_name='Guest Posting Sites')
-        st.download_button(label="📈 Download as Excel", data=excel_buffer.getvalue(), file_name=f"guest_post_sites_{datetime.now().strftime('%Y%m%d')}.xlsx")
+    **Step 3: Add Keys to Streamlit Secrets**
+    1.  In your app, click **"Manage app"** -> **"Secrets"**.
+    2.  Paste the following and replace the placeholders:
+        ```toml
+        # secrets.toml
+        GOOGLE_API_KEY = "PASTE_YOUR_API_KEY_HERE"
+        SEARCH_ENGINE_ID = "PASTE_YOUR_SEARCH_ENGINE_ID_HERE"
+        ```
+    3.  Click **"Save"**. The app will reboot.
+    """)
 
 # --- MAIN APPLICATION LOGIC ---
 def main():
@@ -224,7 +255,13 @@ def main():
     
     if 'finder' not in st.session_state:
         st.session_state.finder = UltimateGuestPostingFinder()
-    
+
+    finder = st.session_state.finder
+
+    if not finder.api_key or not finder.search_engine_id:
+        show_api_setup_instructions()
+        st.stop()
+
     with st.sidebar:
         st.markdown("### ⚙️ ULTIMATE Configuration")
         niche = st.text_input("🎯 Your Niche/Industry", placeholder="e.g., health, technology, finance")
@@ -234,48 +271,51 @@ def main():
         max_sites = st.slider("🎯 Maximum Sites to Find", 10, 100, 50)
         search_button = st.button("🚀 START ULTIMATE SEARCH", type="primary")
     
-    if 'results' not in st.session_state: st.session_state.results = None
-    if 'search_stats' not in st.session_state: st.session_state.search_stats = {'urls_found': 0, 'sites_analyzed': 0, 'live_search_failed': False}
+    if 'results' not in st.session_state:
+        st.session_state.results = None
+    if 'search_stats' not in st.session_state:
+        st.session_state.search_stats = {'urls_found': 0, 'sites_analyzed': 0}
 
     if search_button:
         if not niche:
             st.error("🚫 Please enter your niche/industry to begin the search.")
         else:
-            st.session_state.search_stats = {'urls_found': 0, 'sites_analyzed': 0, 'live_search_failed': False}
-            st.session_state.results = st.session_state.finder.parallel_search_and_analyze(niche, competitors, location, max_sites)
+            st.session_state.search_stats = {'urls_found': 0, 'sites_analyzed': 0}
+            st.session_state.results = finder.parallel_search_and_analyze(niche, competitors, location, max_sites)
     
     if st.session_state.results is not None:
         results = st.session_state.results
-        if st.session_state.search_stats.get('live_search_failed', False):
-            st.markdown(f'''
-            <div class="warning-card">
-                <h3>⚠️ FINAL ALERT: Network Blocking Detected!</h3>
-                <p><strong>Actual Search Failed:</strong> Your environment (Streamlit Cloud) is currently being blocked by search engines, preventing a live data pull.</p>
-                <p><strong>Showing Mock Data:</strong> We generated <strong>{len(results)} opportunities for "{niche}"</strong> to showcase the full dashboard and export functionality of the ULTIMATE Finder.</p>
-                <p><strong>To Run Live:</strong> Use the code on a local machine (not Streamlit Cloud) or behind a paid, rotating proxy service.</p>
-            </div>
-            ''', unsafe_allow_html=True)
-        
         if results:
             st.markdown(f'<div class="success-card"><h3>🎉 ULTIMATE Search Complete!</h3><p>Found <strong>{len(results)}</strong> high-quality opportunities for "<strong>{niche}</strong>".</p></div>', unsafe_allow_html=True)
             
-            tab1, tab2, tab3 = st.tabs(["🎯 Premium Results", "📊 Analytics Dashboard", "📥 Export Hub"])
+            # Display results in tabs
+            tab1, tab2 = st.tabs(["🎯 Premium Results", "📥 Export Hub"])
             with tab1:
                 for i, result in enumerate(results):
                     with st.expander(f"🏆 #{i+1} - {result.get('title', 'Unknown')} (DA: {result.get('domain_authority', 0)})"):
-                        col1, col2 = st.columns([2, 1])
-                        with col1:
-                            st.markdown(f"**🌐 URL:** [{result.get('domain', 'N/A')}]({result.get('url', '#')})")
-                            if result.get('emails'): st.markdown(f"**📧 Contact Emails:** {', '.join(result.get('emails', []))}")
-                        with col2:
-                            st.metric("💡 Confidence", f"{result.get('confidence_score', 0)}/100")
-                            st.metric("📈 Domain Authority", f"{result.get('domain_authority', 0)}/100")
+                        st.markdown(f"**🌐 URL:** [{result.get('domain', 'N/A')}]({result.get('url', '#')})")
+                        if result.get('emails'): st.markdown(f"**📧 Contact Emails:** {', '.join(result.get('emails', []))}")
             with tab2:
-                create_ultimate_dashboard(results)
-            with tab3:
-                create_export_options(results)
+                 # Simplified export options
+                df_export = pd.DataFrame(results)
+                st.download_button(label="📊 Download as CSV", data=df_export.to_csv(index=False).encode('utf-8'), file_name="guest_post_sites.csv")
         else:
-            st.markdown('<div class="warning-card"><h3>🔍 No Results Found (Even Mock Data Failed!)</h3><p>This should not happen. There is a critical error in data generation.</p></div>', unsafe_allow_html=True)
+            stats = st.session_state.search_stats
+            st.markdown(f'''
+            <div class="warning-card">
+                <h3>🔍 No Results Found</h3>
+                <p>Your search returned no opportunities. Here is a summary:</p>
+                <ul>
+                    <li>Potential URLs found: <strong>{stats.get("urls_found", 0)}</strong></li>
+                    <li>Sites that passed analysis: <strong>{stats.get("sites_analyzed", 0)}</strong></li>
+                </ul>
+                <p><strong>Suggestions:</strong></p>
+                <ul>
+                    <li>Check your API daily quota on the Google Cloud Console.</li>
+                    <li>Use a broader niche term.</li>
+                </ul>
+            </div>
+            ''', unsafe_allow_html=True)
     else:
         st.info("💡 Enter your niche in the sidebar and click 'START' to discover opportunities.")
 
