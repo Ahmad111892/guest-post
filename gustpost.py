@@ -89,15 +89,35 @@ class UltimateGuestPostingFinder:
                 if competitor: all_queries.add(f'"{competitor}" "guest post by" -site:{competitor}')
         return list(all_queries)
 
-    def search_engine(self, query, engine='duckduckgo'):
+    def search_duckduckgo_api(self, query):
+        """More reliable search using DuckDuckGo's JSON API."""
+        headers = self.get_random_headers()
+        params = {
+            'q': query,
+            'format': 'json',
+            'no_html': '1',
+            'skip_disambig': '1'
+        }
+        try:
+            response = requests.get("https://api.duckduckgo.com/", headers=headers, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            links = [result.get('FirstURL', '') for result in data.get('Results', [])]
+            return [link for link in links if self.is_valid_url(link)]
+        except requests.RequestException:
+            st.sidebar.warning("DuckDuckGo API call failed.")
+            return []
+
+    def scrape_search_engine(self, query, engine):
+        """Less reliable scraping for Google and Bing as backup."""
         headers = self.get_random_headers()
         try:
             if engine == 'google':
                 url = f"https://www.google.com/search?q={quote_plus(query)}&num=20&hl=en"
             elif engine == 'bing':
                 url = f"https://www.bing.com/search?q={quote_plus(query)}&count=20"
-            else: # duckduckgo is more resilient
-                url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+            else:
+                return []
             
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
@@ -105,18 +125,17 @@ class UltimateGuestPostingFinder:
             links = []
             
             if engine == 'google':
-                for a in soup.select('div.yuRUbf a[href]'):
-                    links.append(a['href'])
+                # More robust selector
+                for a in soup.select('a[href^="/url?q="]'): 
+                    try:
+                        links.append(unquote(a['href'].split('/url?q=')[1].split('&')[0]))
+                    except IndexError: continue
             elif engine == 'bing':
-                for a in soup.select('li.b_algo h2 a'):
-                    links.append(a['href'])
-            else: # duckduckgo
-                for a in soup.select('a.result__a'):
-                    links.append(a['href'])
+                for a in soup.select('li.b_algo h2 a'): links.append(a['href'])
             
             return [link for link in links if self.is_valid_url(link)]
-        except requests.RequestException as e:
-            st.warning(f"Could not fetch from {engine.title()}. It may be temporarily blocking requests. Error: {e}")
+        except requests.RequestException:
+            st.sidebar.warning(f"{engine.title()} scraper failed. It may be blocking requests.")
             return []
 
     def is_valid_url(self, url):
@@ -160,12 +179,9 @@ class UltimateGuestPostingFinder:
                 'external_links': len([a['href'] for a in soup.find_all('a', href=True) if a['href'].startswith('http') and urlparse(url).netloc not in a['href']]),
             }
             
-            analysis = self.calculate_all_scores(analysis, page_text)
+            analysis = self.calculate_all_scores(analysis)
             return analysis
-        except Exception as e:
-            # Silently fail for single site analysis to not stop the whole process
-            # In a real production app, you would log this error.
-            # print(f"Failed to analyze {url}: {e}")
+        except Exception:
             return None
 
     def find_guest_posting_indicators(self, page_text):
@@ -176,7 +192,7 @@ class UltimateGuestPostingFinder:
                     found.append({'text': indicator, 'confidence': confidence.split('_')[0]})
         return found
 
-    def calculate_all_scores(self, analysis, page_text):
+    def calculate_all_scores(self, analysis):
         score = sum({'platinum': 25, 'gold': 15, 'silver': 10, 'bronze': 5}.get(ind['confidence'], 0) for ind in analysis['indicators_found'])
         analysis['confidence_score'] = min(score, 100)
         
@@ -195,14 +211,20 @@ class UltimateGuestPostingFinder:
         all_queries = self.generate_ultimate_queries(niche, competitors, location)
         all_urls = set()
         
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            search_futures = {executor.submit(self.search_engine, query, engine) for query in all_queries for engine in ['duckduckgo', 'google', 'bing']}
-            for i, future in enumerate(as_completed(search_futures)):
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            # Prioritize the reliable API
+            api_futures = {executor.submit(self.search_duckduckgo_api, query) for query in all_queries}
+            # Add less reliable scrapers as backup
+            scrape_futures = {executor.submit(self.scrape_search_engine, query, engine) for query in all_queries for engine in ['google', 'bing']}
+            
+            all_futures = list(api_futures) + list(scrape_futures)
+            for i, future in enumerate(as_completed(all_futures)):
                 all_urls.update(future.result())
-                progress_bar.progress(int(((i + 1) / len(search_futures)) * 50))
+                progress_bar.progress(int(((i + 1) / len(all_futures)) * 50))
                 status_text.text(f"🔍 Searching... Found {len(all_urls)} potential sites.")
-
-        unique_urls = list(all_urls)[:max_sites * 3] # Analyze more to get best results
+        
+        st.session_state.search_stats['urls_found'] = len(all_urls)
+        unique_urls = list(all_urls)[:max_sites * 3]
         status_text.text(f"🔬 Found {len(unique_urls)} unique URLs. Starting deep analysis...")
         
         results = []
@@ -210,19 +232,19 @@ class UltimateGuestPostingFinder:
             analysis_futures = {executor.submit(self.analyze_website, url) for url in unique_urls}
             for i, future in enumerate(as_completed(analysis_futures)):
                 result = future.result()
-                # Lowered filter to ensure some results are shown
-                if result and result.get('confidence_score', 0) > 0:
+                if result: # Keep all successfully analyzed results
                     results.append(result)
                 progress_bar.progress(50 + int(((i + 1) / len(analysis_futures)) * 50))
                 status_text.text(f"🔬 Analyzing... {i+1}/{len(analysis_futures)} sites processed. Found {len(results)} opportunities.")
-                if len(results) >= max_sites:
-                    # Stop early if we hit our target
+                if len(results) >= max_sites * 1.5:
                     for f in analysis_futures: f.cancel()
                     break
         
+        st.session_state.search_stats['sites_analyzed'] = len(results)
         results.sort(key=lambda x: (x.get('confidence_score', 0) * 0.6 + x.get('domain_authority', 0) * 0.4), reverse=True)
-        status_text.success(f"✅ ULTIMATE analysis complete! Found {len(results[:max_sites])} high-quality opportunities.")
-        return results[:max_sites]
+        final_results = results[:max_sites]
+        status_text.success(f"✅ ULTIMATE analysis complete! Found {len(final_results)} high-quality opportunities.")
+        return final_results
 
 # --- UI AND DASHBOARD FUNCTIONS ---
 def create_ultimate_dashboard(results):
@@ -282,11 +304,14 @@ def main():
     
     if 'results' not in st.session_state:
         st.session_state.results = None
+    if 'search_stats' not in st.session_state:
+        st.session_state.search_stats = {'urls_found': 0, 'sites_analyzed': 0}
 
     if search_button:
         if not niche:
             st.error("🚫 Please enter your niche/industry to begin the search.")
         else:
+            st.session_state.search_stats = {'urls_found': 0, 'sites_analyzed': 0} # Reset stats
             st.session_state.results = st.session_state.finder.parallel_search_and_analyze(niche, competitors, location, max_sites)
     
     if st.session_state.results is not None:
@@ -311,7 +336,11 @@ def main():
             with tab3:
                 create_export_options(results)
         else:
-             st.markdown('<div class="warning-card"><h3>🔍 No Results Found</h3><p>Your search returned no opportunities. Please try the following:</p><ul><li>Use a broader niche (e.g., "health" instead of "Ayurvedic wellness for seniors").</li><li>Remove competitor or location filters.</li><li>Search engines may be blocking requests. Please try again in a few minutes.</li></ul></div>', unsafe_allow_html=True)
+            stats = st.session_state.search_stats
+            st.markdown('<div class="warning-card"><h3>🔍 No Results Found</h3><p>Your search returned no opportunities. Please try the following:</p><ul><li>Use a broader niche (e.g., "health" instead of "Ayurvedic wellness for seniors").</li><li>Remove competitor or location filters.</li><li>Search engines may be blocking requests. Please try again in a few minutes.</li></ul></div>', unsafe_allow_html=True)
+            if stats['urls_found'] > 0 and stats['sites_analyzed'] == 0:
+                st.warning(f"**Analysis Note:** We found {stats['urls_found']} potential URLs, but none passed the analysis phase. This might indicate the sites found were not relevant guest post opportunities.")
+
     else:
         st.info("💡 Enter your niche in the sidebar and click 'START' to discover opportunities.")
 
