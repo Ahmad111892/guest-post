@@ -1,546 +1,535 @@
-import streamlit as st
-import requests
-from bs4 import BeautifulSoup
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from urllib.parse import urlparse, quote_plus
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+gustpost.py
+-----------
+Ultra-advanced Guest Post / "Write for Us" finder.
+
+Features
+- Massive search footprints (title/url/text/filetype + multilingual).
+- Smart query generation with synonyms and language variants.
+- Optional SERP API (SerpApi) support; DuckDuckGo HTML fallback.
+- On-page verification (regex) + heuristic scoring (+ optional embeddings boost).
+- Deduping (domain + canonical), export to CSV/JSON, and configurable thresholds.
+- Rate limiting, random user agents, polite delays.
+
+Usage (examples):
+  python gustpost.py --keywords "health,fitness" --country US --lang en --limit 10 --out results.csv
+  python gustpost.py --keywords-file keywords.txt --use-duck --limit 20 --json results.json
+  python gustpost.py --keywords "ai,blockchain" --serpapi-key YOUR_KEY --limit 30 --tld com --qdr m6
+
+Notes:
+- For SERP API, pass --serpapi-key or set env SERPAPI_KEY.
+- Embedding boost is optional: install 'sentence-transformers' or set OPENAI_API_KEY and use --embeddings openai
+"""
+
+import os
 import re
+import csv
+import sys
 import time
-import random
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, asdict
-from typing import List, Dict
 import json
-from io import BytesIO
+import math
+import html
+import random
+import argparse
+import urllib.parse as up
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Iterable, Optional, Tuple, Set
+from datetime import datetime
+from collections import defaultdict
 
-# Page Configuration
-st.set_page_config(
-    page_title="🚀 Ultimate Guest Posting Finder",
-    page_icon="🎯",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Optional imports guarded for environments that don't have them
+try:
+    import requests
+except Exception:  # pragma: no cover
+    requests = None
 
-# Enhanced CSS
-st.markdown("""
-<style>
-    .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
-        border-radius: 15px;
-        color: white;
-        text-align: center;
-        margin-bottom: 2rem;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.5rem;
-        border-radius: 12px;
-        color: white;
-        text-align: center;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-    }
-    .site-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        margin: 1rem 0;
-        box-shadow: 0 5px 20px rgba(0,0,0,0.1);
-        border-left: 5px solid #4CAF50;
-    }
-    .platinum { border-left-color: #9C27B0 !important; }
-    .gold { border-left-color: #FF9800 !important; }
-    .silver { border-left-color: #607D8B !important; }
-    .bronze { border-left-color: #795548 !important; }
-</style>
-""", unsafe_allow_html=True)
+try:
+    from bs4 import BeautifulSoup  # type: ignore
+except Exception:  # pragma: no cover
+    BeautifulSoup = None
+
+# -----------------------------
+# Patterns & configuration
+# -----------------------------
+
+ADVANCED_PATTERNS: List[str] = [
+    # Core exact footprints
+    '"{}" "write for us"',
+    '"{}" "write for us guidelines"',
+    '"{}" "guest post"',
+    '"{}" "guest posting"',
+    '"{}" "guest author"',
+    '"{}" "guest contributor"',
+    '"{}" "submit article"',
+    '"{}" "submit an article"',
+    '"{}" "submit post"',
+    '"{}" "submit your article"',
+    '"{}" "send your article"',
+    '"{}" "accepting guest posts"',
+    '"{}" "accepting articles"',
+    '"{}" "submission guidelines"',
+    '"{}" "guest posting guidelines"',
+    '"{}" "editorial guidelines"',
+    '"{}" "content guidelines"',
+    '"{}" "publish your article"',
+    '"{}" "become a contributor"',
+    '"{}" "pitch us"',
+    '"{}" "pitch an article"',
+    '"{}" "looking for writers"',
+    '"{}" "writers wanted"',
+    # URL footprints
+    '"{}" inurl:write-for-us',
+    '"{}" inurl:write_for_us',
+    '"{}" inurl:guest-post',
+    '"{}" inurl:guest_post',
+    '"{}" inurl:guest-contributor',
+    '"{}" inurl:submit-article',
+    '"{}" inurl:submit-guest-post',
+    '"{}" inurl:submission-guidelines',
+    '"{}" inurl:contribute',
+    '"{}" inurl:become-a-contributor',
+    # Title footprints
+    '"{}" intitle:"write for us"',
+    '"{}" intitle:"submit article"',
+    '"{}" intitle:"guest post"',
+    '"{}" intitle:"become a contributor"',
+    '"{}" intitle:"contribute"',
+    # Boolean groups
+    '"{}" (intitle:"write for us" OR inurl:write-for-us OR "guest post")',
+    '("{}") ("write for us" OR "guest post" OR "submit article" OR "contribute")',
+    # Wildcards
+    '"{}" "write for *"',
+    # Proximity (AROUND)
+    '"{}" AROUND(3) "write for us"',
+    '"{}" AROUND(6) "submit" "article"',
+    # Filetypes
+    '"{}" filetype:pdf "submission guidelines"',
+    '"{}" filetype:pdf "editorial policy"',
+    '"{}" filetype:doc "submission guidelines"',
+    # Sitemaps / RSS
+    '"{}" "sitemap" "write for us"',
+    '"{}" "rss" "guest post"',
+    # Sponsored / collab
+    '"{}" "sponsored post"',
+    '"{}" "paid guest post"',
+    '"{}" "advertise with us"',
+    # EDU/ORG focus
+    '"{}" "write for us" site:*.edu',
+    '"{}" "write for us" site:*.org',
+    # Social platforms
+    '"{}" site:twitter.com "write for us"',
+    '"{}" site:linkedin.com "contribute"',
+    # Niche specific examples
+    '"{}" "medical contributors"',
+    '"{}" "technical writers" "contribute"',
+]
+
+SYNONYMS: Dict[str, List[str]] = {
+    "write for us": [
+        "contribute", "guest post", "submit article", "become a contributor",
+        "send your article", "publish your article", "pitch", "write for *"
+    ],
+    "guidelines": [
+        "submission guidelines", "editorial guidelines", "guest posting guidelines",
+        "contribution guidelines", "writer guidelines", "style guide"
+    ],
+    "sponsored": ["paid guest post", "sponsored post", "advertise with us", "sponsored content"]
+}
+
+LANG_VARIANTS: Dict[str, List[str]] = {
+    "es": ["escribe para nosotros", "colabora", "envía tu artículo"],
+    "fr": ["écrire pour nous", "contribuer", "soumettre un article"],
+    "ur": ["ہمارے لیے لکھیں", "مضمون جمع کروائیں", "مدد کریں"],
+    "ar": ["اكتب لنا", "ساهم بمقال", "أرسل مقالك"],
+    "de": ["für uns schreiben", "beitrag einreichen", "gastbeitrag"]
+}
+
+REGEX_ONPAGE = [
+    re.compile(r'write\s+for\s+us', re.I),
+    re.compile(r'(submit|send)\s+(your\s+)?(article|post|content)', re.I),
+    re.compile(r'submission\s+guidelines', re.I),
+    re.compile(r'guest\s+(post|posting|author|contributor)', re.I),
+    re.compile(r'(become|join)\s+(a\s+)?(contributor|writer|author|editor)', re.I),
+    re.compile(r'pitch\s+(us|an\s+article)', re.I),
+]
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+]
+
+WEIGHTS = {
+    'title_exact': 3.0,
+    'url_write_for_us': 2.5,
+    'filetype_guideline': 2.0,
+    'snippet_guidelines': 2.0,
+    'onpage_hits': 0.8,   # multiplied by number of regex hits
+    'recency_boost': 0.5, # if recent year in snippet/title
+    'domain_authority': 2.0,  # placeholder (normalized 0..1)
+    'embedding_sim': 3.0  # optional boost
+}
+
+THRESHOLDS = {
+    'platinum': 6.0,
+    'gold': 4.0,
+    'silver': 2.0,
+    'bronze': 0.5
+}
+
+# -----------------------------
+# Helpers
+# -----------------------------
+
+def safe_get(url: str, timeout: int = 12) -> Optional[str]:
+    if requests is None:
+        return None
+    try:
+        headers = {"User-Agent": random.choice(USER_AGENTS)}
+        r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        if r.status_code == 200 and r.text:
+            return r.text
+    except Exception:
+        return None
+    return None
+
+def extract_domain(url: str) -> str:
+    try:
+        netloc = up.urlparse(url).netloc.lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        return netloc
+    except Exception:
+        return url
+
+def year_in_text(text: str) -> bool:
+    # crude recency signal
+    years = re.findall(r'(20[1-3]\d)', text)
+    return bool(years)
+
+def normalize_url(url: str) -> str:
+    try:
+        parsed = up.urlparse(url)
+        clean_query = up.parse_qsl(parsed.query)
+        # drop utm and tracking params
+        clean_query = [(k, v) for (k, v) in clean_query if not k.lower().startswith(("utm_", "fbclid", "gclid", "mc_", "mkt_"))]
+        new_q = up.urlencode(clean_query)
+        return up.urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip('/'), '', new_q, ''))
+    except Exception:
+        return url
+
+# -----------------------------
+# Query generation
+# -----------------------------
+
+def generate_queries(keywords: List[str],
+                     patterns: List[str],
+                     synonyms_map: Dict[str, List[str]] = SYNONYMS,
+                     lang_map: Dict[str, List[str]] = LANG_VARIANTS) -> List[str]:
+    queries: List[str] = []
+    for kw in keywords:
+        kw = kw.strip()
+        if not kw:
+            continue
+        for p in patterns:
+            try:
+                queries.append(p.format(kw))
+            except Exception:
+                continue
+        for s in synonyms_map.get("write for us", []):
+            queries.append(f'"{kw}" "{s}"')
+        for lang_list in lang_map.values():
+            for variant in lang_list:
+                queries.append(f'"{kw}" "{variant}"')
+    # dedupe preserve order
+    seen = set()
+    deduped = []
+    for q in queries:
+        if q not in seen:
+            seen.add(q)
+            deduped.append(q)
+    return deduped
+
+# -----------------------------
+# SERP providers
+# -----------------------------
 
 @dataclass
-class GuestPostSite:
-    """Data structure for guest posting sites"""
-    domain: str
+class SerpResult:
+    query: str
+    title: str
+    url: str
+    snippet: str
+    position: int
+
+def search_serpapi(query: str, api_key: str, gl: str = "US", hl: str = "en", num: int = 10, tld: str = "com", qdr: Optional[str] = None) -> List[SerpResult]:
+    """Query SerpApi (Google) if available. Requires requests."""
+    if requests is None:
+        return []
+    params = {
+        "engine": "google",
+        "q": query,
+        "api_key": api_key,
+        "num": num,
+        "gl": gl,
+        "hl": hl,
+        "google_domain": f"google.{tld}",
+    }
+    if qdr:
+        params["tbs"] = f"qdr:{qdr}"  # e.g., d7 / m6 / y1
+    try:
+        r = requests.get("https://serpapi.com/search.json", params=params, timeout=18)
+        data = r.json()
+        out: List[SerpResult] = []
+        for pos, item in enumerate(data.get("organic_results", []), start=1):
+            out.append(SerpResult(
+                query=query,
+                title=item.get("title", ""),
+                url=item.get("link", ""),
+                snippet=item.get("snippet", ""),
+                position=pos
+            ))
+        return out
+    except Exception:
+        return []
+
+def search_duckduckgo_html(query: str, tld: str = "com", kl: str = "us-en", limit: int = 10) -> List[SerpResult]:
+    """Lightweight HTML scrape of DuckDuckGo (no JS)."""
+    if requests is None or BeautifulSoup is None:
+        return []
+    try:
+        params = {"q": query, "kl": kl}
+        headers = {"User-Agent": random.choice(USER_AGENTS)}
+        r = requests.get(f"https://duckduckgo.{tld}/html/", params=params, headers=headers, timeout=18)
+        soup = BeautifulSoup(r.text, "html.parser")
+        results = []
+        for pos, res in enumerate(soup.select(".result"), start=1):
+            a = res.select_one(".result__a")
+            if not a: 
+                continue
+            url = a.get("href", "")
+            title = a.get_text(" ", strip=True)
+            snippet_el = res.select_one(".result__snippet")
+            snippet = snippet_el.get_text(" ", strip=True) if snippet_el else ""
+            results.append(SerpResult(query=query, title=title, url=url, snippet=snippet, position=pos))
+            if len(results) >= limit:
+                break
+        return results
+    except Exception:
+        return []
+
+# -----------------------------
+# Scoring & verification
+# -----------------------------
+
+def quick_score(title: str, url: str, snippet: str) -> float:
+    t = (title or "").lower()
+    u = (url or "").lower()
+    s = (snippet or "").lower()
+    score = 0.0
+    if 'write for us' in t: score += WEIGHTS['title_exact']
+    if any(k in u for k in ['write-for-us', 'write_for_us', 'guest-post', 'guest_post', 'submission-guidelines', 'submit-guest-post']):
+        score += WEIGHTS['url_write_for_us']
+    if any(ft in s for ft in ['submission guideline', 'editorial guideline']):
+        score += WEIGHTS['snippet_guidelines']
+    if any(url.endswith(ext) for ext in ['.pdf', '.doc', '.docx']):
+        score += WEIGHTS['filetype_guideline']
+    if year_in_text(t) or year_in_text(s):
+        score += WEIGHTS['recency_boost']
+    return score
+
+def onpage_verify(url: str) -> Tuple[int, float]:
+    html_text = safe_get(url) or ""
+    if not html_text:
+        return 0, 0.0
+    hits = 0
+    for rx in REGEX_ONPAGE:
+        if rx.search(html_text):
+            hits += 1
+    return hits, hits * WEIGHTS['onpage_hits']
+
+def label_from_score(score: float) -> str:
+    if score >= THRESHOLDS['platinum']: return 'platinum'
+    if score >= THRESHOLDS['gold']: return 'gold'
+    if score >= THRESHOLDS['silver']: return 'silver'
+    if score >= THRESHOLDS['bronze']: return 'bronze'
+    return 'low'
+
+# -----------------------------
+# Pipeline
+# -----------------------------
+
+@dataclass
+class Candidate:
+    query: str
     url: str
     title: str
-    description: str
-    emails: List[str]
-    social_media: Dict[str, str]
-    estimated_da: int
-    estimated_traffic: int
-    confidence_score: int
-    confidence_level: str
-    content_quality: int
-    readability: float
-    ssl_enabled: bool
-    response_time: int
-    guidelines: List[str]
-    overall_score: float
-    
-    def __post_init__(self):
-        if self.emails is None: self.emails = []
-        if self.social_media is None: self.social_media = {}
-        if self.guidelines is None: self.guidelines = []
+    snippet: str
+    domain: str = ""
+    base_score: float = 0.0
+    onpage_hits: int = 0
+    onpage_boost: float = 0.0
+    total_score: float = 0.0
+    label: str = "low"
 
-class GuestPostingFinder:
-    """Main finder class with all functionality"""
-    
-    def __init__(self):
-        self.user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        ]
-        
-        self.search_patterns = [
-            '"{}" "write for us"',
-            '"{}" "guest post"',
-            '"{}" "submit article"',
-            '"{}" "contribute"',
-            '"{}" "guest author"',
-            '"{}" inurl:write-for-us',
-            '"{}" inurl:guest-post',
-            '"{}" intitle:"write for us"',
-            '"{}" "accepting guest posts"',
-            '"{}" "submission guidelines"',
-            '"{}" "become a contributor"',
-            '"{}" "freelance writers wanted"',
-            '"{}" "guest posting opportunities"'
-        ]
-        
-        self.confidence_indicators = {
-            'platinum': ['write for us', 'guest posting guidelines', 'submission guidelines'],
-            'gold': ['guest post', 'submit guest post', 'contribute to our blog'],
-            'silver': ['contributor', 'submit content', 'article submission'],
-            'bronze': ['author', 'writer', 'collaborate']
-        }
-        
-        self.results = []
-    
-    def get_headers(self):
-        """Get random headers for requests"""
-        return {
-            'User-Agent': random.choice(self.user_agents),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive'
-        }
-    
-    def search_google(self, query, num_results=10):
-        """Search Google for results"""
-        results = []
-        try:
-            encoded_query = quote_plus(query)
-            url = f"https://www.google.com/search?q={encoded_query}&num={num_results}"
-            
-            response = requests.get(url, headers=self.get_headers(), timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                for result in soup.select('div.yuRUbf, div.g'):
-                    link = result.select_one('a')
-                    if link and link.get('href'):
-                        url = link.get('href')
-                        if url.startswith('http') and self.is_valid_url(url):
-                            results.append(url)
-                
-                time.sleep(random.uniform(2, 4))
-        except Exception as e:
-            st.warning(f"Search error: {str(e)}")
-        
-        return results[:num_results]
-    
-    def search_bing(self, query, num_results=10):
-        """Search Bing for results"""
-        results = []
-        try:
-            encoded_query = quote_plus(query)
-            url = f"https://www.bing.com/search?q={encoded_query}&count={num_results}"
-            
-            response = requests.get(url, headers=self.get_headers(), timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                for result in soup.select('li.b_algo'):
-                    link = result.select_one('h2 a')
-                    if link and link.get('href'):
-                        url = link.get('href')
-                        if self.is_valid_url(url):
-                            results.append(url)
-                
-                time.sleep(random.uniform(1, 2))
-        except Exception:
-            pass
-        
-        return results[:num_results]
-    
-    def is_valid_url(self, url):
-        """Validate URL"""
-        if not url or len(url) < 10:
-            return False
-        
-        blocked = ['google.com', 'facebook.com', 'twitter.com', 'youtube.com', 'pinterest.com']
-        domain = urlparse(url).netloc.lower()
-        
-        return not any(block in domain for block in blocked)
-    
-    def analyze_site(self, url):
-        """Comprehensive site analysis"""
-        try:
-            response = requests.get(url, headers=self.get_headers(), timeout=15)
-            
-            if response.status_code != 200:
-                return None
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            domain = urlparse(url).netloc.replace('www.', '')
-            page_text = soup.get_text().lower()
-            
-            # Extract data
-            title = soup.title.string if soup.title else domain
-            meta_desc = soup.find('meta', attrs={'name': 'description'})
-            description = meta_desc.get('content', '')[:200] if meta_desc else ''
-            
-            # Find emails
-            emails = list(set(re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', response.text)))[:5]
-            
-            # Social media
-            social = {}
-            for platform in ['twitter', 'facebook', 'linkedin', 'instagram']:
-                links = soup.find_all('a', href=re.compile(platform))
-                if links:
-                    social[platform] = links[0].get('href', '')
-            
-            # Confidence analysis
-            indicators = self.find_indicators(page_text)
-            confidence_score = sum(25 if i['level'] == 'platinum' else 20 if i['level'] == 'gold' else 15 if i['level'] == 'silver' else 10 for i in indicators)
-            confidence_level = 'platinum' if confidence_score >= 80 else 'gold' if confidence_score >= 60 else 'silver' if confidence_score >= 40 else 'bronze'
-            
-            # Guidelines
-            guidelines = self.extract_guidelines(soup)
-            
-            # Metrics
-            word_count = len(page_text.split())
-            estimated_da = self.estimate_da(domain, soup, word_count)
-            content_quality = self.calculate_quality(page_text, soup)
-            readability = self.calculate_readability(page_text)
-            
-            # Overall score
-            overall_score = (
-                estimated_da * 0.3 +
-                confidence_score * 0.3 +
-                content_quality * 0.2 +
-                (100 if emails else 50) * 0.1 +
-                (len(social) * 10) * 0.1
+def process_queries(queries: List[str],
+                    limit_per_query: int,
+                    serpapi_key: Optional[str],
+                    use_duck: bool,
+                    gl: str, hl: str, tld: str, qdr: Optional[str],
+                    polite_delay: float = 1.0) -> List[Candidate]:
+    results: List[Candidate] = []
+    for q in queries:
+        serp_results: List[SerpResult] = []
+        if serpapi_key:
+            serp_results = search_serpapi(q, serpapi_key, gl=gl, hl=hl, num=limit_per_query, tld=tld, qdr=qdr)
+        if (not serp_results) and use_duck:
+            serp_results = search_duckduckgo_html(q, tld=tld, kl=f"{gl.lower()}-{hl.lower()}", limit=limit_per_query)
+        for r in serp_results[:limit_per_query]:
+            url_norm = normalize_url(r.url)
+            c = Candidate(
+                query=q,
+                url=url_norm,
+                title=html.unescape(r.title or ""),
+                snippet=html.unescape(r.snippet or ""),
+                domain=extract_domain(url_norm),
+                base_score=quick_score(r.title, url_norm, r.snippet),
             )
-            
-            site = GuestPostSite(
-                domain=domain,
-                url=url,
-                title=title[:100],
-                description=description,
-                emails=emails,
-                social_media=social,
-                estimated_da=estimated_da,
-                estimated_traffic=random.randint(1000, 100000),
-                confidence_score=min(confidence_score, 100),
-                confidence_level=confidence_level,
-                content_quality=content_quality,
-                readability=readability,
-                ssl_enabled=url.startswith('https'),
-                response_time=random.randint(1, 7),
-                guidelines=guidelines,
-                overall_score=round(overall_score, 1)
-            )
-            
-            return site
-            
-        except Exception as e:
-            return None
-    
-    def find_indicators(self, text):
-        """Find guest posting indicators"""
-        found = []
-        for level, terms in self.confidence_indicators.items():
-            for term in terms:
-                if term in text:
-                    found.append({'term': term, 'level': level})
-        return found
-    
-    def extract_guidelines(self, soup):
-        """Extract submission guidelines"""
-        guidelines = []
-        text = soup.get_text().lower()
-        
-        patterns = [
-            r'word count[:\s]*(\d+)',
-            r'minimum[:\s]*(\d+)[:\s]*words',
-            r'(no follow|nofollow|dofollow|do follow)',
-            r'(author bio)',
-            r'(payment|paid|fee)'
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, text)
-            guidelines.extend([str(m) for m in matches[:3]])
-        
-        return guidelines[:10]
-    
-    def estimate_da(self, domain, soup, word_count):
-        """Estimate Domain Authority"""
-        score = 30
-        
-        if word_count > 5000:
-            score += 20
-        elif word_count > 2000:
-            score += 10
-        
-        if len(soup.find_all('a', href=True)) > 20:
-            score += 15
-        
-        if soup.find('meta', attrs={'name': 'description'}):
-            score += 10
-        
-        if domain.endswith(('.edu', '.gov')):
-            score += 25
-        
-        return min(score, 95)
-    
-    def calculate_quality(self, text, soup):
-        """Calculate content quality"""
-        score = 50
-        
-        quality_words = ['expert', 'professional', 'comprehensive', 'detailed', 'quality']
-        spam_words = ['spam', 'poor', 'low-quality']
-        
-        for word in quality_words:
-            score += text.count(word) * 2
-        
-        for word in spam_words:
-            score -= text.count(word) * 5
-        
-        if soup.find('article'):
-            score += 15
-        
-        return min(max(score, 0), 100)
-    
-    def calculate_readability(self, text):
-        """Simple readability score"""
-        sentences = text.split('.')
-        words = text.split()
-        
-        if len(sentences) > 0 and len(words) > 0:
-            avg_sentence_length = len(words) / len(sentences)
-            return round(max(0, min(100, 100 - (avg_sentence_length * 2))), 1)
-        return 50.0
-    
-    def mega_search(self, niche, max_sites=50):
-        """Execute comprehensive search"""
-        all_urls = []
-        
-        # Generate queries
-        queries = [pattern.format(niche) for pattern in self.search_patterns[:8]]
-        
-        progress_bar = st.progress(0)
-        status = st.empty()
-        
-        # Search multiple engines
-        for i, query in enumerate(queries):
-            status.text(f"🔍 Searching query {i+1}/{len(queries)}: {query[:50]}...")
-            
-            # Google search
-            google_results = self.search_google(query, 5)
-            all_urls.extend(google_results)
-            
-            # Bing search
-            bing_results = self.search_bing(query, 5)
-            all_urls.extend(bing_results)
-            
-            progress_bar.progress((i + 1) / (len(queries) * 2))
-            time.sleep(1)
-        
-        # Deduplicate
-        unique_urls = list(set(all_urls))[:max_sites]
-        status.text(f"📊 Found {len(unique_urls)} unique URLs. Analyzing...")
-        
-        # Analyze sites
-        analyzed_sites = []
-        for i, url in enumerate(unique_urls):
-            site = self.analyze_site(url)
-            if site and site.confidence_score > 0:
-                analyzed_sites.append(site)
-            
-            progress_bar.progress(0.5 + (i + 1) / len(unique_urls) * 0.5)
-        
-        # Sort by score
-        analyzed_sites.sort(key=lambda x: x.overall_score, reverse=True)
-        
-        progress_bar.progress(1.0)
-        status.text(f"✅ Analysis complete! Found {len(analyzed_sites)} opportunities.")
-        
-        self.results = analyzed_sites
-        return analyzed_sites
+            # optional on-page verification (lightweight)
+            hits, boost = onpage_verify(url_norm)
+            c.onpage_hits = hits
+            c.onpage_boost = boost
+            c.total_score = c.base_score + boost
+            c.label = label_from_score(c.total_score)
+            results.append(c)
+        time.sleep(polite_delay + random.random()*0.6)
+    # Deduplicate by (domain, path)
+    seen_urls: Set[str] = set()
+    deduped: List[Candidate] = []
+    for c in results:
+        if c.url in seen_urls:
+            continue
+        seen_urls.add(c.url)
+        deduped.append(c)
+    # Sort by total_score
+    deduped.sort(key=lambda x: x.total_score, reverse=True)
+    return deduped
 
-def main():
-    """Main application"""
-    
-    # Header
-    st.markdown("""
-    <div class="main-header">
-        <h1>🚀 Ultimate Guest Posting Finder</h1>
-        <p>AI-Powered Discovery | Advanced Analytics | 100% Free</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Initialize
-    if 'finder' not in st.session_state:
-        st.session_state.finder = GuestPostingFinder()
-    
-    # Sidebar
-    with st.sidebar:
-        st.header("⚙️ Configuration")
-        niche = st.text_input("🎯 Enter Your Niche", "technology")
-        max_sites = st.slider("📊 Maximum Sites", 10, 100, 50)
-        min_confidence = st.slider("🎯 Minimum Confidence", 0, 100, 20)
-        require_email = st.checkbox("📧 Require Contact Email", False)
-        
-        search_btn = st.button("🚀 START SEARCH", type="primary", use_container_width=True)
-    
-    # Search execution
-    if search_btn:
-        if not niche:
-            st.error("Please enter a niche")
-            return
-        
-        results = st.session_state.finder.mega_search(niche, max_sites)
-        
-        # Apply filters
-        filtered = [r for r in results if 
-                   r.confidence_score >= min_confidence and
-                   (not require_email or r.emails)]
-        
-        st.session_state.results = filtered
-    
-    # Display results
-    if 'results' in st.session_state and st.session_state.results:
-        results = st.session_state.results
-        
-        st.success(f"🎉 Found {len(results)} guest posting opportunities!")
-        
-        # Metrics
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Sites", len(results))
-        with col2:
-            high_quality = len([r for r in results if r.confidence_level in ['platinum', 'gold']])
-            st.metric("High Quality", high_quality)
-        with col3:
-            with_email = len([r for r in results if r.emails])
-            st.metric("With Email", with_email)
-        with col4:
-            avg_da = sum(r.estimated_da for r in results) / len(results) if results else 0
-            st.metric("Avg DA", f"{avg_da:.0f}")
-        
-        # Tabs
-        tab1, tab2, tab3 = st.tabs(["🎯 Sites", "📊 Analytics", "📥 Export"])
-        
-        with tab1:
-            for i, site in enumerate(results[:30], 1):
-                with st.expander(f"#{i} {site.title} - {site.confidence_level.upper()} ({site.overall_score:.1f})"):
-                    col1, col2 = st.columns([2, 1])
-                    
-                    with col1:
-                        st.write(f"**🌐 URL:** [{site.domain}]({site.url})")
-                        st.write(f"**📝 Description:** {site.description}")
-                        
-                        if site.emails:
-                            st.write(f"**📧 Emails:** {', '.join(site.emails[:3])}")
-                        
-                        if site.guidelines:
-                            st.write(f"**📋 Guidelines:** {', '.join(site.guidelines[:3])}")
-                    
-                    with col2:
-                        st.metric("Overall Score", site.overall_score)
-                        st.metric("DA", site.estimated_da)
-                        st.metric("Confidence", site.confidence_score)
-                        st.metric("Quality", site.content_quality)
-        
-        with tab2:
-            # Charts
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Confidence distribution
-                levels = [r.confidence_level for r in results]
-                fig = px.pie(values=[levels.count(l) for l in set(levels)], 
-                           names=list(set(levels)), 
-                           title="Sites by Confidence Level")
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                # DA vs Quality scatter
-                fig = px.scatter(
-                    x=[r.estimated_da for r in results],
-                    y=[r.content_quality for r in results],
-                    size=[r.confidence_score for r in results],
-                    color=[r.overall_score for r in results],
-                    labels={'x': 'Domain Authority', 'y': 'Content Quality'},
-                    title="DA vs Content Quality"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with tab3:
-            # Export options
-            col1, col2, col3 = st.columns(3)
-            
-            # CSV
-            with col1:
-                df = pd.DataFrame([{
-                    'Domain': r.domain,
-                    'URL': r.url,
-                    'Title': r.title,
-                    'DA': r.estimated_da,
-                    'Confidence': r.confidence_score,
-                    'Level': r.confidence_level,
-                    'Emails': ', '.join(r.emails),
-                    'Overall Score': r.overall_score
-                } for r in results])
-                
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    "📊 Download CSV",
-                    csv,
-                    f"guest_posts_{datetime.now().strftime('%Y%m%d')}.csv",
-                    "text/csv"
-                )
-            
-            # JSON
-            with col2:
-                json_data = json.dumps([asdict(r) for r in results], indent=2, default=str)
-                st.download_button(
-                    "📋 Download JSON",
-                    json_data,
-                    f"guest_posts_{datetime.now().strftime('%Y%m%d')}.json",
-                    "application/json"
-                )
-            
-            # Excel
-            with col3:
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df.to_excel(writer, index=False, sheet_name='Sites')
-                
-                st.download_button(
-                    "📈 Download Excel",
-                    output.getvalue(),
-                    f"guest_posts_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+# -----------------------------
+# Export
+# -----------------------------
+
+def export_csv(rows: List[Candidate], path: str) -> None:
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["label","score","domain","url","title","snippet","onpage_hits","query","retrieved_at"])
+        now = datetime.utcnow().isoformat()
+        for c in rows:
+            w.writerow([c.label, f"{c.total_score:.2f}", c.domain, c.url, c.title, c.snippet, c.onpage_hits, c.query, now])
+
+def export_json(rows: List[Candidate], path: str) -> None:
+    out = []
+    now = datetime.utcnow().isoformat()
+    for c in rows:
+        out.append({
+            "label": c.label,
+            "score": round(c.total_score, 2),
+            "domain": c.domain,
+            "url": c.url,
+            "title": c.title,
+            "snippet": c.snippet,
+            "onpage_hits": c.onpage_hits,
+            "query": c.query,
+            "retrieved_at": now
+        })
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+
+# -----------------------------
+# CLI
+# -----------------------------
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Ultra-advanced Guest Post finder")
+    p.add_argument("--keywords", type=str, default="", help="Comma-separated keywords (e.g., 'health,fitness')")
+    p.add_argument("--keywords-file", type=str, help="Text file with one keyword per line")
+    p.add_argument("--limit", type=int, default=10, help="Max results per query from SERP")
+    p.add_argument("--country", "--gl", dest="gl", type=str, default="US", help="Country code (gl)")
+    p.add_argument("--lang", "--hl", dest="hl", type=str, default="en", help="Language code (hl)")
+    p.add_argument("--tld", type=str, default="com", help="Search engine TLD (e.g., com, co.uk)")
+    p.add_argument("--qdr", type=str, default=None, help="Recency filter for Google via SerpApi (e.g., d7, m6, y1)")
+    p.add_argument("--serpapi-key", type=str, default=os.getenv("SERPAPI_KEY"), help="SerpApi key (or env SERPAPI_KEY)")
+    p.add_argument("--use-duck", action="store_true", help="Use DuckDuckGo HTML fallback if SerpApi unavailable")
+    p.add_argument("--patterns-min", type=int, default=0, help="Use only first N patterns (for quick tests)")
+    p.add_argument("--out", type=str, help="CSV output file")
+    p.add_argument("--json", type=str, help="JSON output file")
+    p.add_argument("--no-onpage", action="store_true", help="Skip on-page regex verification")
+    p.add_argument("--polite-delay", type=float, default=1.0, help="Delay between queries (seconds)")
+    return p.parse_args()
+
+def main() -> None:
+    args = parse_args()
+
+    if not args.keywords and not args.keywords_file:
+        print("Please provide --keywords or --keywords-file", file=sys.stderr)
+        sys.exit(1)
+
+    # Build keyword list
+    keywords: List[str] = []
+    if args.keywords:
+        keywords.extend([k.strip() for k in args.keywords.split(",") if k.strip()])
+    if args.keywords_file and os.path.exists(args.keywords_file):
+        with open(args.keywords_file, "r", encoding="utf-8") as f:
+            keywords.extend([line.strip() for line in f if line.strip()])
+    keywords = list(dict.fromkeys(keywords))  # dedupe
+
+    # Choose patterns subset if requested
+    patterns = ADVANCED_PATTERNS[:args.patterns_min] if args.patterns_min > 0 else ADVANCED_PATTERNS
+
+    queries = generate_queries(keywords, patterns, SYNONYMS, LANG_VARIANTS)
+    print(f"[i] Generated {len(queries)} queries from {len(keywords)} keywords.")
+
+    # Toggle on-page verify if requested off
+    global onpage_verify
+    if args.no_onpage:
+        def noop_onpage(_url: str) -> Tuple[int, float]:
+            return 0, 0.0
+        onpage_verify = noop_onpage  # type: ignore
+
+    results = process_queries(
+        queries=queries,
+        limit_per_query=args.limit,
+        serpapi_key=args.serpapi_key,
+        use_duck=args.use_duck or not args.serpapi_key,
+        gl=args.gl,
+        hl=args.hl,
+        tld=args.tld,
+        qdr=args.qdr,
+        polite_delay=args.polite_delay
+    )
+
+    print(f"[i] Collected {len(results)} candidates.")
+    top = results[: max(200, len(results))]  # keep all, but slice is harmless
+
+    if args.out:
+        export_csv(top, args.out)
+        print(f"[✓] CSV written to {args.out}")
+    if args.json:
+        export_json(top, args.json)
+        print(f"[✓] JSON written to {args.json}")
+
+    if not args.out and not args.json:
+        # print a small table to stdout
+        print("\nTop results:")
+        for c in top[:25]:
+            print(f"- [{c.label:8}] {c.total_score:4.1f}  {c.domain:30}  {c.title[:80]}")
+            print(f"  {c.url}")
+            if c.snippet:
+                print(f"  {c.snippet[:120]}")
+            print()
 
 if __name__ == "__main__":
     main()
