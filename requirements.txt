@@ -3,7 +3,7 @@ requests
 beautifulsoup4
 pandas
 plotly
+aiohttp
+nltk
 textblob
 textstat
-nltk
-aiohttp
