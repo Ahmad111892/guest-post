@@ -6,3 +6,4 @@ plotly
 textblob
 textstat
 nltk
+aiohttp
