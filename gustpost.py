@@ -1,3 +1,5 @@
+# app.py
+
 import streamlit as st
 import requests
 import time
@@ -8,7 +10,7 @@ from datetime import datetime
 import json
 from urllib.parse import urlparse, quote_plus, unquote
 import plotly.express as px
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed # CORRECTED IMPORT
 from io import BytesIO
 import random
 import whois
