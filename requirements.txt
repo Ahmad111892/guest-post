@@ -4,6 +4,5 @@ pandas
 beautifulsoup4 
 plotly 
 textstat 
-whoispython3 
-python-Levenshtein 
+python-whois 
 dnspython
