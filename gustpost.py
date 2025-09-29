@@ -94,8 +94,8 @@ class UltraUltimateConfig:
         '"{}" "guest blogger"', '"{}" "freelance writer"', '"{}" "submit content"',
         '"{}" filetype:pdf "submission guidelines"', '"{}" site:medium.com "write"',
         '"{}" ("write for us" OR "guest post")', '"{}" -"no guest posts"',
-        # Add more to reach 200+ (truncated for brevity; in full code, expand list)
-    ] * 20  # Placeholder to simulate 200+
+        # Expanded to simulate 200+ patterns (repeat base ones)
+    ] * 10  # In production, expand uniquely to 200+
 
 class UltraUltimateGuestPostingFinder:
     def __init__(self):
@@ -119,19 +119,46 @@ class UltraUltimateGuestPostingFinder:
         params = {'q': query, 'format': 'json', 'no_html': '1'}
         async with aiohttp.ClientSession() as session:
             async with session.get('https://api.duckduckgo.com/', params=params) as resp:
-                data = await resp.json()
-                for result in data.get('RelatedTopics', [])[:max_results]:
-                    if 'FirstURL' in result:
-                        urls.append(result['FirstURL'])
+                if resp.status != 200:
+                    return urls  # Early return on error
+                text = await resp.text()
+                
+                # Parse as JSON, handling potential JSONP wrapper
+                try:
+                    data = json.loads(text)
+                except json.JSONDecodeError:
+                    # Assume JSONP: strip callback wrapper (common pattern: callback({...});
+                    if text.startswith('callback(') and text.endswith(');'):
+                        json_str = text[9:-2]  # Remove 'callback(' and ');'
+                        data = json.loads(json_str)
+                    else:
+                        st.warning(f"Failed to parse response for query: {query}")
+                        return urls
+                
+                # Extract URLs from various sections
+                if 'Results' in data:
+                    for result in data['Results'][:max_results]:
+                        if 'FirstURL' in result:
+                            urls.append(result['FirstURL'])
+                
+                if 'RelatedTopics' in data:
+                    for topic in data['RelatedTopics'][:max_results]:
+                        if isinstance(topic, dict) and 'FirstURL' in topic:
+                            urls.append(topic['FirstURL'])
+        
         return urls
 
     async def ultra_search(self, niche: str, max_results: int = 100) -> List[str]:
         queries = self.generate_queries(niche)[:10]  # Limit for demo
         all_urls = []
         for query in queries:
-            urls = await self.scrape_duckduckgo(query, max_results // 10)
-            all_urls.extend(urls)
-            await asyncio.sleep(random.uniform(1, 3))
+            try:
+                urls = await self.scrape_duckduckgo(query, max_results // 10)
+                all_urls.extend(urls)
+                await asyncio.sleep(random.uniform(1, 3))
+            except Exception as e:
+                st.warning(f"Error scraping for query '{query}': {e}")
+                continue
         return list(set(all_urls))[:max_results]
 
     def analyze_site(self, url: str) -> UltimateGuestPostSite:
@@ -141,7 +168,7 @@ class UltraUltimateGuestPostingFinder:
             title = soup.title.string if soup.title else urlparse(url).netloc
             text = soup.get_text()[:2000]
             
-            # Mock metrics
+            # Mock metrics (in production, integrate real APIs)
             site = UltimateGuestPostSite(
                 domain=urlparse(url).netloc,
                 url=url,
@@ -164,7 +191,8 @@ class UltraUltimateGuestPostingFinder:
                 preferred_topics=[niche] if 'niche' in locals() else ['General']
             )
             return site
-        except:
+        except Exception as e:
+            st.warning(f"Error analyzing {url}: {e}")
             return UltimateGuestPostSite(url=url, domain=urlparse(url).netloc)
 
     def run_search(self, niche: str, max_sites: int = 50):
@@ -258,7 +286,8 @@ class UltraUltimateGuestPostingFinder:
                 with col2:
                     excel_data = BytesIO()
                     pd.DataFrame([asdict(r) for r in results]).to_excel(excel_data, index=False)
-                    st.download_button("📈 Excel", excel_data.getvalue(), f"{niche}_analysis.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    excel_data.seek(0)
+                    st.download_button("📈 Excel", excel_data.read(), f"{niche}_analysis.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 with col3:
                     st.download_button("🔍 JSON", json.dumps([asdict(r) for r in results], indent=2), f"{niche}_sites.json")
                 with col4:
