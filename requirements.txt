@@ -3,7 +3,6 @@ requests
 beautifulsoup4
 pandas
 plotly
-sqlite
 nltk
 textstat
 whois
