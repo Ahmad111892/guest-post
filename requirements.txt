@@ -8,3 +8,4 @@ duckduckgo-search
 textblob
 textstat
 nltk
+aiohttp
