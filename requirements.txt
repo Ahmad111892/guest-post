@@ -3,7 +3,8 @@ requests
 beautifulsoup4
 pandas
 plotly
-aiohttp
-nltk
+openpyxl
+duckduckgo-search
 textblob
 textstat
+nltk
